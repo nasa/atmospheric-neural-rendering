@@ -1,6 +1,6 @@
 # Atmospheric Neural Rendering (AtmoNR)
 
-assets/atmonr_instant_ngp.mp4
+![](assets/atmonr_instant_ngp.gif)  <!-- TO DO: swap to .mp4 after migrating to github  -->
 
 This is a library and set of scripts to support the usage of neural rendering for atmospheric / cloud tomography in mult-angle satellite data. In other words, this allows the unsupervised 3D reconstruction of clouds in flat, multi-angle satellite imagery.
 

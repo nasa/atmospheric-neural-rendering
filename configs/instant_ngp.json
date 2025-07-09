@@ -1,0 +1,70 @@
+{
+    "data_type": "HARP2",
+    "pipeline": {
+        "type": "InstantNGP",
+        "include_height": false,
+        "point_preprocessor": "horizontal",
+        "num_bands": 4,
+        "ray_origin_height": 20000,
+        "subsurface_depth": 1000,
+        "instant_ngp": {
+            "ema_decay": null,
+            "encoding": {
+                "otype": "HashGrid",
+                "n_levels": 8,
+                "n_features_per_level": 4,
+                "log2_hashmap_size": 19,
+                "base_resolution": 16
+            },
+            "network": {
+                "otype": "FullyFusedMLP",
+                "activation": "ReLU",
+                "output_activation": "None",
+                "n_neurons": 64,
+                "n_hidden_layers": 1
+            },
+            "dir_encoding": {
+                "otype": "Composite",
+                "nested": [
+                    {
+                        "n_dims_to_encode": 3,
+                        "otype": "SphericalHarmonics",
+                        "degree": 4
+                    },
+                    {
+                        "otype": "Identity"
+                    }
+                ]
+            },
+            "rgb_network": {
+                "otype": "FullyFusedMLP",
+                "activation": "ReLU",
+                "output_activation": "None",
+                "n_neurons": 64,
+                "n_hidden_layers": 2
+            }
+        }
+    },
+    "trainer": {
+        "all_gpu": true,
+        "num_workers": 0,
+        "batch_size": 4096,
+        "num_iters": 5e4,
+        "print_frequency": 10,
+        "optimizer": {
+            "lr": 1e-2,
+            "betas": [
+                0.9,
+                0.99
+            ],
+            "eps": 1e-15,
+            "weight_decay": 1e-6
+        },
+        "scheduler": {
+            "type": "fixed",
+            "gamma": 0.33,
+            "decay_start": 20000,
+            "decay_interval": 10000
+        }
+    }
+}

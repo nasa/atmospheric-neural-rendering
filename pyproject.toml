@@ -1,0 +1,60 @@
+[project]
+name = "atmonr"
+dynamic = ["version"]
+description = ''
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = []
+authors = [{ name = "Sean Foley", email = "sean.r.foley@nasa.gov" }]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+]
+
+[tool.coverage.run]
+source_pkgs = ["atmonr", "tests"]
+branch = true
+parallel = true
+
+[tool.coverage.paths]
+atmonr = ["src/atmonr", "*/atmonr/src/atmonr"]
+tests = ["tests", "*/atmonr/tests"]
+
+[tool.coverage.report]
+exclude_also = ["if __name__ == .__main__.:"]
+
+[tool.pyright]
+typeCheckingMode = "standard"
+include = ["scripts", "src"]
+ignore = []
+exclude = ["data"]
+pythonPlatform = "Linux"
+
+[tool.pytest.ini_options]
+filterwarnings = ["ignore::DeprecationWarning:earthaccess"]
+
+[tool.ruff]
+exclude = [
+  ".git",
+  ".ipynb_checkpoints",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".vscode",
+  "*.ipynb",
+  "configs",
+  "data",
+]
+
+[tool.ruff.lint]
+extend-select = ["E203"]
+preview = true
+
+[tool.ruff.format]
+exclude = ["*.ipynb"]

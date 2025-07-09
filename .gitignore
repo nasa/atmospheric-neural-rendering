@@ -1,0 +1,10 @@
+__pycache__/
+.pytest_cache
+.ruff_cache
+.vscode
+.ipynb_checkpoints
+*.egg-info
+
+build
+_temp_frames
+data/ETOPO1_ocssw.nc

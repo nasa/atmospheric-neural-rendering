@@ -1,0 +1,38 @@
+{
+    "data_type": "HARP2",
+    "pipeline": {
+        "type": "NeRF",
+        "include_height": false,
+        "point_preprocessor": "horizontal",
+        "num_bands": 4,
+        "ray_origin_height": 20000,
+        "subsurface_depth": 1000,
+        "sampler": {
+            "N_c": 64,
+            "N_f": 128
+        },
+        "encoder": {
+            "L_x": [
+                14,
+                14,
+                10
+            ],
+            "L_d": 4
+        },
+        "mlp_hidden_dim": 256
+    },
+    "trainer": {
+        "all_gpu": true,
+        "num_workers": 0,
+        "batch_size": 4096,
+        "num_iters": 2e5,
+        "print_frequency": 10,
+        "optimizer": {
+            "lr": 0.0005
+        },
+        "scheduler": {
+            "type": "target_lr",
+            "final_lr": 0.00005
+        }
+    }
+}

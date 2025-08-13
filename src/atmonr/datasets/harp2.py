@@ -159,7 +159,8 @@ class HARP2Dataset(Dataset):
         phiv = _parse_field(self.nc_data["geolocation_data/sensor_azimuth_angle"])
 
         # max normalization for intensity
-        i /= np.nanmax(i)
+        self.max_i = np.nanmax(i)
+        i /= self.max_i
 
         # reorder the channels, as HARP2 data is in GRNB order but we want BGRN
         self.lat = torch.from_numpy(lat).cuda()[..., self.band_order]

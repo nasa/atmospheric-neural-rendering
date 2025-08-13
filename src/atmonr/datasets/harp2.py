@@ -258,15 +258,29 @@ class HARP2Dataset(Dataset):
             lat_range, lon_range = lat_max - lat_min, lon_max - lon_min
             alt_range = self.ray_origin_height + self.subsurface_depth
 
+            # if this granule crosses the dateline, shift lon by 180
+            shift_lon = lon_max > 179 and lon_min < -179
+            if shift_lon:
+                non_nan_lon = non_nan_lon % 360 - 180
+                lon_min, lon_max = non_nan_lon.min(), non_nan_lon.max()
+                lon_range = lon_max - lon_min
+
+            # def preprocess_coords(coords_xyz: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
             def preprocess_coords(coords_xyz: torch.Tensor) -> torch.Tensor:
                 dtype = coords_xyz.dtype
                 coords_xyz = coords_xyz * self.scale + self.offset
                 x, y, z = coords_xyz[..., 0], coords_xyz[..., 1], coords_xyz[..., 2]
                 lat, lon, alt = cartesian_to_horizontal(x, y, z)
+                # subsurface_mask = alt < 0
+                if shift_lon:
+                    lon = lon % 360 - 180
                 lat = 2 * (lat - lat_min) / lat_range - 1
                 lon = 2 * (lon - lon_min) / lon_range - 1
                 alt = 2 * (alt + self.subsurface_depth) / alt_range - 1
-                return torch.stack([lat, lon, alt], dim=-1).to(dtype=dtype)
+                coords = torch.stack([lat, lon, alt], dim=-1).to(dtype=dtype)
+                coords = torch.clip(coords, min=-1, max=1)
+                # return coords, subsurface_mask
+                return coords
 
             return preprocess_coords
         else:

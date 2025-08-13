@@ -121,7 +121,8 @@ class HARP2ExtractDataset(Dataset):
 
         # check assumption 1
         assert torch.nanmean(lat_img[-1, 0] - lat_img[0, 0]) < 0
-        assert torch.nanmean(lon_img[0, -1] - lon_img[0, 0]) > 0
+        lon_mean_diff = torch.nanmean(lon_img[0, -1] - lon_img[0, 0]) % 360
+        assert lon_mean_diff > 0 and lon_mean_diff < 180
         # check assumption 2
         for i, j in [(0, 0), (0, -1), (-1, 0), (-1, -1)]:
             assert not lat_img[i, j].isnan().all()

@@ -11,7 +11,7 @@ from atmonr.datasets.factory import Dataset
 from atmonr.losses import hdr_loss
 from atmonr.pipelines.pipeline import Pipeline
 from atmonr.render import render
-from atmonr.samplers import append_heights, sample_uniform_bins
+from atmonr.samplers import append_heights, sample_biased_bins
 
 
 class InstantNGPPipeline(Pipeline):
@@ -132,8 +132,9 @@ class InstantNGPPipeline(Pipeline):
             alpha=0.2,
         )
 
+        subsurface_mask = None
         if self.point_preprocessor:
-            pts = self.point_preprocessor(pts)
+            pts, subsurface_mask = self.point_preprocessor(pts)
 
         # Instant-NGP uses [0, 1], not [-1, 1]
         pts = (pts + 1) / 2
@@ -161,6 +162,12 @@ class InstantNGPPipeline(Pipeline):
         # ReLU activation for density as it should be non-negative
         sigma = F.relu(sigma)
 
+        if subsurface_mask is not None:
+            # set subsurface densities to a high number
+            sigma_surface = torch.zeros_like(sigma, requires_grad=False)
+            sigma_surface[subsurface_mask] = 1000
+            sigma = torch.maximum(sigma, sigma_surface)
+
         # volume rendering
         color_map, weights = render(z_vals * (self.scale / 1000), color, sigma)
 
@@ -170,6 +177,7 @@ class InstantNGPPipeline(Pipeline):
             "color_map_fine": color_map,
             "weights_fine": weights,
             "z_vals_fine": z_vals,
+            "subsurface_mask": subsurface_mask,
         }
         if self.config["include_height"]:
             results["norm_heights_fine"] = pts[..., 3]
@@ -187,8 +195,11 @@ class InstantNGPPipeline(Pipeline):
             sigma: Extinction coefficient at the provided points.
         """
         # if we have a point preprocessing function, use it
+        subsurface_mask = None
         if self.point_preprocessor:
-            pts = self.point_preprocessor(pts[None])[0]
+            pts, subsurface_mask = self.point_preprocessor(pts[None])
+            pts, subsurface_mask = pts[0], subsurface_mask[0]
+
         # Instant-NGP uses [0, 1], not [-1, 1]
         pts = (pts + 1) / 2
         # add height above surface to the points vector, if specified in the config
@@ -201,11 +212,16 @@ class InstantNGPPipeline(Pipeline):
 
         # the first num_bands values of the intermediate output are treated as densities
         sigma = torch.clip(
-            pos_out[..., : self.config["num_bands"]].view(
-                pts.shape[0], self.config["num_bands"]
+            pos_out[..., : self.num_density_outputs].view(
+                pts.shape[0], self.num_density_outputs
             ),
             min=0,
         )
+
+        if subsurface_mask is not None:
+            # set subsurface densities to a high number
+            sigma[subsurface_mask] = 1000
+
         return sigma
 
     def compute_loss(

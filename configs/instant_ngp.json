@@ -5,6 +5,8 @@
         "include_height": false,
         "point_preprocessor": "horizontal",
         "num_bands": 4,
+        "multi_band_extinction": false,
+        "num_samples_per_ray": 192,
         "ray_origin_height": 20000,
         "subsurface_depth": 1000,
         "loss": "hdr",

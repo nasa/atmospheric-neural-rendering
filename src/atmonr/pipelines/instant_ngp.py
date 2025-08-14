@@ -37,6 +37,10 @@ class InstantNGPPipeline(Pipeline):
         """
         super().__init__(config, dataset)
 
+        self.num_density_outputs = 1
+        if self.config["multi_band_extinction"]:
+            self.num_density_outputs = self.config["num_bands"]
+
         num_inputs = 4 if self.config["include_height"] else 3
 
         pos_encoder = tcnn.Encoding(

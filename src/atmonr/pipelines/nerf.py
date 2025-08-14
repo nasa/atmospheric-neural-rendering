@@ -148,6 +148,12 @@ class NeRFPipeline(Pipeline):
         else:
             sigma = sigma.view(B_, N, -1)
 
+        # exponential activation for color, clamp to 11 to avoid overflow w/ float16
+        color = torch.exp(torch.clamp(color, max=11))
+
+        # ReLU activation for density as it should be non-negative
+        sigma = F.relu(sigma)
+
         # volume rendering
         color_map, weights = render(z_vals * (self.scale / 1000), color, sigma)
 

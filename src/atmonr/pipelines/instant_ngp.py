@@ -142,8 +142,14 @@ class InstantNGPPipeline(Pipeline):
         color = self.dir_model(torch.cat([dirs, pos_out], dim=1))
         color = color.view(B_, N, self.config["num_bands"])
 
-        # the first num_bands values of the intermediate output are treated as densities
-        sigma = pos_out[..., : self.config["num_bands"]].view(B_, N, -1)
+        # pull the densities out of the intermediate output
+        sigma = pos_out[..., : self.num_density_outputs].view(B_, N, -1)
+
+        # exponential activation for color, clamp to 11 to avoid overflow w/ float16
+        color = torch.exp(torch.clamp(color, max=11))
+
+        # ReLU activation for density as it should be non-negative
+        sigma = F.relu(sigma)
 
         # volume rendering
         color_map, weights = render(z_vals * (self.scale / 1000), color, sigma)

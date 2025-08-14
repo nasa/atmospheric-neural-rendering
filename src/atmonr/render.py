@@ -12,7 +12,7 @@ def render(
     subsequent samples.
 
     Args:
-        z_vals: Distances of samples along the viewing rays (B, N_samples).
+        z_vals: Distances in km of samples along the viewing rays (B, N_samples).
         color: Colors at sampled locations(B, N_samples, N_lambda).
         sigma: Densities per band at sampled locations (B, N_samples, N_lambda).
 

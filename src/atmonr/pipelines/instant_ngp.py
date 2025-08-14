@@ -139,7 +139,7 @@ class InstantNGPPipeline(Pipeline):
         sigma = pos_out[..., : self.config["num_bands"]].view(B_, N, -1)
 
         # volume rendering
-        color_map, weights = render(z_vals, color, sigma)
+        color_map, weights = render(z_vals * (self.scale / 1000), color, sigma)
 
         results = {
             "color_fine": color,

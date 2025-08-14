@@ -1,5 +1,4 @@
 import torch
-import torch.nn.functional as F
 
 
 def hdr_loss(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:

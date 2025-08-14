@@ -266,7 +266,9 @@ class HARP2Dataset(Dataset):
                 lon_min, lon_max = non_nan_lon.min(), non_nan_lon.max()
                 lon_range = lon_max - lon_min
 
-            def preprocess_coords(coords_xyz: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+            def preprocess_coords(
+                coords_xyz: torch.Tensor,
+            ) -> tuple[torch.Tensor, torch.Tensor]:
                 dtype = coords_xyz.dtype
                 coords_xyz = coords_xyz * self.scale + self.offset
                 x, y, z = coords_xyz[..., 0], coords_xyz[..., 1], coords_xyz[..., 2]

@@ -4,7 +4,7 @@ from typing import Any, Mapping
 import tinycudann as tcnn
 import torch
 import torch.nn.functional as F
-from torch.optim import AdamW, Optimizer
+from torch.optim import Adam, Optimizer
 from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn  # type: ignore
 
 from atmonr.datasets.factory import Dataset
@@ -101,7 +101,7 @@ class InstantNGPPipeline(Pipeline):
         mlp_params = chain(
             self.pos_model[1].parameters(), self.dir_model[1].parameters()
         )
-        optimizer = AdamW(
+        optimizer = Adam(
             [
                 {"params": enc_params, "weight_decay": 0},
                 {"params": mlp_params},

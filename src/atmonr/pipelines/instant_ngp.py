@@ -8,6 +8,7 @@ from torch.optim import AdamW, Optimizer
 from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn  # type: ignore
 
 from atmonr.datasets.factory import Dataset
+from atmonr.losses import hdr_loss
 from atmonr.pipelines.pipeline import Pipeline
 from atmonr.render import render
 from atmonr.samplers import append_heights, sample_uniform_bins
@@ -76,6 +77,12 @@ class InstantNGPPipeline(Pipeline):
             self.avg_pos_model = None
             self.avg_dir_model = None
         self.training = True
+
+        assert self.config["loss"] in ["mse", "hdr"]
+        if self.config["loss"] == "mse":
+            self.loss_fn = F.mse_loss
+        else:
+            self.loss_fn = hdr_loss
 
     def send_tensors_to(self, device: int) -> None:
         """Move the relevant tensors to a CUDA-capable device.
@@ -188,18 +195,19 @@ class InstantNGPPipeline(Pipeline):
     def compute_loss(
         self, ray_batch: Mapping[str, torch.Tensor], results: dict[str, torch.Tensor]
     ) -> torch.Tensor:
-        """Compute the Huber loss.
+        """Compute the loss.
         Args:
             ray_batch: A batch of rays and associated observations.
             results: Results from the forward pass of Instant NGP.
         Returns:
-            loss: Huber loss of results with respect to this batch.
+            loss: Loss of results with respect to this batch.
         """
         results_indexed = torch.take_along_dim(
             results["color_map_fine"], ray_batch["band_idx"][:, None], 1
         )[:, 0]
-        loss = F.huber_loss(results_indexed, ray_batch["rad"])
-        return loss
+        gt = ray_batch["rad"].to(dtype=results_indexed.dtype)
+
+        return self.loss_fn(results_indexed, gt)
 
     def update_parameters(self) -> None:
         """Update parameters with weight averaging."""

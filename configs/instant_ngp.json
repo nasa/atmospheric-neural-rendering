@@ -7,6 +7,7 @@
         "num_bands": 4,
         "ray_origin_height": 20000,
         "subsurface_depth": 1000,
+        "loss": "hdr",
         "instant_ngp": {
             "ema_decay": null,
             "encoding": {

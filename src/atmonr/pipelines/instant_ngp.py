@@ -119,8 +119,14 @@ class InstantNGPPipeline(Pipeline):
             results: Results, including densities and colors.
         """
         B_ = ray_batch["origin"].shape[0]
-        N = 192
-        pts, z_vals = sample_uniform_bins(ray_batch, n_bins=N)
+        N = self.config["num_samples_per_ray"]
+        pts, z_vals = sample_biased_bins(
+            ray_batch,
+            N,
+            ray_origin_height=self.config["ray_origin_height"],
+            subsurface_depth=self.config["subsurface_depth"],
+            alpha=0.2,
+        )
 
         if self.point_preprocessor:
             pts = self.point_preprocessor(pts)

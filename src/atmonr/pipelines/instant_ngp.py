@@ -273,12 +273,12 @@ class InstantNGPPipeline(Pipeline):
         """
         if self.avg_pos_model:
             self.avg_pos_model.load_state_dict(state_dict["avg_pos_model"])
-            self.pos_model = self.avg_pos_model.module[0]
+            self.pos_model = self.avg_pos_model.module[0]  # type: ignore
         else:
             self.pos_model.load_state_dict(state_dict["pos_model"])
         if self.avg_dir_model:
             self.avg_dir_model.load_state_dict(state_dict["avg_dir_model"])
-            self.dir_model = self.avg_dir_model.module[0]
+            self.dir_model = self.avg_dir_model.module[0]  # type: ignore
         else:
             self.dir_model.load_state_dict(state_dict["dir_model"])
 

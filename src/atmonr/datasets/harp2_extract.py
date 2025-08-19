@@ -74,11 +74,11 @@ class HARP2ExtractDataset(Dataset):
             download_harp2_file(l1c_filename, l1c_path.parent, "L1C")
 
         # load the netCDF4 file
-        self.l1c_nc_data = netCDF4._netCDF4.Dataset(l1c_path)
+        self.l1c_nc_data = netCDF4.Dataset(l1c_path)
         self.shp = self.l1c_nc_data["geolocation_data/latitude"].shape
 
         def _parse_field(
-            field: netCDF4._netCDF4.Variable,
+            field: netCDF4.Variable,
         ) -> torch.Tensor:
             """Read a field in HARP2 L1C data, performing the following transformations:
             1) fill invalid values with nan
@@ -216,7 +216,7 @@ class HARP2ExtractDataset(Dataset):
         )
 
         self.height = self._interp_dem_height(
-            netCDF4._netCDF4.Dataset(DEM_PATH), sample_lat, sample_lon
+            netCDF4.Dataset(DEM_PATH), sample_lat, sample_lon
         )
 
         self.lat = sample_lat[:, :, None].repeat((1, 1, self.sample_alt.shape[0]))
@@ -237,7 +237,7 @@ class HARP2ExtractDataset(Dataset):
 
     def _interp_dem_height(
         self,
-        dem_dataset: netCDF4._netCDF4.Dataset,
+        dem_dataset: netCDF4.Dataset,
         sample_lat: torch.Tensor,
         sample_lon: torch.Tensor,
     ) -> torch.Tensor:
@@ -331,7 +331,7 @@ class HARP2ExtractDataset(Dataset):
         """
         num_bands = sigma.shape[-1]
         sigma = sigma.view(list(self.shp[:2]) + [self.sample_alt.shape[0], num_bands])
-        ncfile = netCDF4._netCDF4.Dataset(output_filepath, mode="w")
+        ncfile = netCDF4.Dataset(output_filepath, mode="w")
 
         # dimensions
         ncfile.createDimension("bins_along_track", self.lat.shape[0])

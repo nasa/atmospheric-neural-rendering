@@ -34,13 +34,18 @@ class HARP2Dataset(Dataset):
         filename: str,
         ray_origin_height: float = 20000.0,
         subsurface_depth: float = 1000.0,
+        chunk_size: int = int(1e5),
     ) -> None:
         """Initialize a HARP2Dataset.
 
         Args:
             filename: Filename corresponding to a HARP2 file.
-            ray_origin_height: Altitude at which to construct ray origins, i.e. the
-                'top' of a scene.
+            ray_origin_height: Altitude in meters at which to construct ray origins,
+                i.e. the 'top' of a scene.
+            subsurface_depth: Depth in meters beneath the surface at which to construct
+                ray terminators, i.e. the 'bottom' of a scene.
+            chunk_size: Number of pixels to process at once. Use this to cut down on GPU
+                memory overhead during startup.
         """
         super().__init__()
         self.filename = filename
@@ -53,7 +58,7 @@ class HARP2Dataset(Dataset):
             download_harp2_file(self.filename, self.local_path.parent, "L1B")
 
         # load the netCDF4 file
-        self.nc_data = netCDF4._netCDF4.Dataset(self.local_path)
+        self.nc_data = netCDF4.Dataset(self.local_path)
 
         # used to reorder the channels, as HARP2 data is in GRNB order but we want BGRN
         self.band_order = torch.cat(
@@ -69,15 +74,39 @@ class HARP2Dataset(Dataset):
         self._select_best_slice()
 
         # convert from image-like data to a flattened array of rays
-        self.ray_origin, self.ray_dir, self.ray_len = get_rays(
-            self.lat,
-            self.lon,
-            self.alt,
-            self.thetav,
-            self.phiv,
-            ray_origin_height=self.ray_origin_height,
-            subsurface_depth=self.subsurface_depth,
+        num_rays = self.lat.shape[0] * self.lat.shape[1]
+        self.ray_origin = torch.zeros(
+            (num_rays, 3), dtype=torch.float32, device=self.lat.device
         )
+        self.ray_dir = torch.zeros(
+            (num_rays, 3), dtype=torch.float32, device=self.lat.device
+        )
+        self.ray_len = torch.zeros(
+            (num_rays,), dtype=torch.float32, device=self.lat.device
+        )
+
+        # call get_rays in chunks to minimize memory overhead of rotation matrix tensor
+        total_rays = 0
+        for chunk_idx in range(-(-self.lat.shape[0] // chunk_size)):
+            slc_in = slice(
+                chunk_idx * chunk_size,
+                min((chunk_idx + 1) * chunk_size, self.lat.shape[0]),
+            )
+            chunk_origin, chunk_dir, chunk_len = get_rays(
+                self.lat[slc_in],
+                self.lon[slc_in],
+                self.alt[slc_in],
+                self.thetav[slc_in],
+                self.phiv[slc_in],
+                ray_origin_height=self.ray_origin_height,
+                subsurface_depth=self.subsurface_depth,
+            )
+            num_chunk_rays = chunk_origin.shape[0]
+            slc_out = slice(total_rays, total_rays + num_chunk_rays)
+            self.ray_origin[slc_out] = chunk_origin
+            self.ray_dir[slc_out] = chunk_dir
+            self.ray_len[slc_out] = chunk_len
+            total_rays += num_chunk_rays
         self.ray_rad = self.int_arr.flatten()
 
         # get an integer index of bands
@@ -139,7 +168,7 @@ class HARP2Dataset(Dataset):
         self.img_shp = self.nc_data["observation_data/i"].shape[1:]  # image dims
 
         def _parse_field(
-            field: netCDF4._netCDF4.Variable,
+            field: netCDF4.Variable,
         ) -> npt.NDArray[np.float32]:
             """Read a field in HARP2 L1B data, performing the following transformations:
             1) fill invalid values with nan
@@ -211,6 +240,9 @@ class HARP2Dataset(Dataset):
         Returns:
             metrics: A dictionary of metric names and their values.
         """
+        # clip image before image metrics since intensities are max-normalized
+        pred_img = torch.clip(pred_img, min=0, max=1)
+
         data_range = (target_img.max() - target_img.min()).item()
         psnr = torch.zeros(90, device=self.band_order.device)
         ssim = torch.zeros(90, device=self.band_order.device)

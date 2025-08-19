@@ -75,14 +75,23 @@ class HARP2Dataset(Dataset):
 
         # convert from image-like data to a flattened array of rays
         num_rays = self.lat.shape[0] * self.lat.shape[1]
-        self.ray_origin = torch.zeros((num_rays, 3), dtype=torch.float32, device=self.lat.device)
-        self.ray_dir = torch.zeros((num_rays, 3), dtype=torch.float32, device=self.lat.device)
-        self.ray_len = torch.zeros((num_rays,), dtype=torch.float32, device=self.lat.device)
+        self.ray_origin = torch.zeros(
+            (num_rays, 3), dtype=torch.float32, device=self.lat.device
+        )
+        self.ray_dir = torch.zeros(
+            (num_rays, 3), dtype=torch.float32, device=self.lat.device
+        )
+        self.ray_len = torch.zeros(
+            (num_rays,), dtype=torch.float32, device=self.lat.device
+        )
 
         # call get_rays in chunks to minimize memory overhead of rotation matrix tensor
         total_rays = 0
         for chunk_idx in range(-(-self.lat.shape[0] // chunk_size)):
-            slc_in = slice(chunk_idx * chunk_size, min((chunk_idx + 1) * chunk_size, self.lat.shape[0]))
+            slc_in = slice(
+                chunk_idx * chunk_size,
+                min((chunk_idx + 1) * chunk_size, self.lat.shape[0]),
+            )
             chunk_origin, chunk_dir, chunk_len = get_rays(
                 self.lat[slc_in],
                 self.lon[slc_in],

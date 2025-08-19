@@ -2,7 +2,7 @@
 
 ![](assets/atmonr_instant_ngp.gif)  <!-- TO DO: swap to .mp4 after migrating to github  -->
 
-This is a library and set of scripts to support the usage of neural rendering for atmospheric / cloud tomography in mult-angle satellite data. In other words, this allows the unsupervised 3D reconstruction of clouds in flat, multi-angle satellite imagery.
+This is a library and set of scripts to support the usage of neural rendering for atmospheric / cloud tomography in multi-angle satellite data. In other words, this allows the unsupervised 3D reconstruction of clouds in flat, multi-angle satellite imagery.
 
 Current support includes two neural rendering methods: Neural Radiance Fields ([NeRF](https://github.com/bmild/nerf)) and Instant Neural Graphics Primitives ([Instant-NGP](https://github.com/NVlabs/instant-ngp)), as well as one data from one sensor: the Hyper Angular Rainbow Polarimeter ([HARP2](https://pace.oceansciences.org/harp2.htm)) aboard the Plankton, Aerosol, Cloud-ocean Ecosystem ([PACE](https://pace.gsfc.nasa.gov/)) mission.
 
@@ -12,7 +12,7 @@ Note that this project assumes access to a GPU with at least 32GB of VRAM, becau
 1. Clone this repository, then navigate to its top-level directory.
 2. Using mamba, create and activate the environment with:
     ```console
-    mamba create -f env.yml && mamba activate atmonr
+    mamba env create -f env.yml && mamba activate atmonr
     ```
 3. Follow the [Pytorch instructions](https://pytorch.org/get-started/locally/) to install torch and torchvision with CUDA support.
 

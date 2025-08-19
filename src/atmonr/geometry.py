@@ -265,15 +265,6 @@ def get_rays(
     # flip the direction to have top of atmosphere as origin
     comp_dirs = -comp_dirs.view(dirs.shape)
 
-    # # construct origins at approximately ray_origin_height meters from the surface
-    # surface_to_origin_lens = ray_origin_height / torch.cos(
-    #     thetav * torch.pi / 180
-    # ).view(comp_dirs.shape[:2])
-    # # add subsurface depth to lengths when sampling rays
-    # subsurface_lens = subsurface_depth / torch.cos(thetav * torch.pi / 180).view(
-    #     comp_dirs.shape[:2]
-    # )
-
     # iteratively solve for the origin point of rays
     surface_to_origin_lens = (ray_origin_height - alt) / torch.cos(
         thetav * torch.pi / 180

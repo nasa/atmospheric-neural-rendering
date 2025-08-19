@@ -51,8 +51,8 @@
     "trainer": {
         "all_gpu": true,
         "num_workers": 0,
-        "batch_size": 4096,
-        "num_iters": 5e4,
+        "batch_size": 32768,
+        "num_iters": 5e3,
         "print_frequency": 10,
         "optimizer": {
             "lr": 1e-2,

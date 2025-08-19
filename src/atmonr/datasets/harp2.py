@@ -97,6 +97,7 @@ class HARP2Dataset(Dataset):
             self.ray_origin[slc_out] = chunk_origin
             self.ray_dir[slc_out] = chunk_dir
             self.ray_len[slc_out] = chunk_len
+            total_rays += num_chunk_rays
         self.ray_rad = self.int_arr.flatten()
 
         # get an integer index of bands

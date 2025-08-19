@@ -53,7 +53,7 @@ class HARP2Dataset(Dataset):
             download_harp2_file(self.filename, self.local_path.parent, "L1B")
 
         # load the netCDF4 file
-        self.nc_data = netCDF4._netCDF4.Dataset(self.local_path)
+        self.nc_data = netCDF4.Dataset(self.local_path)
 
         # used to reorder the channels, as HARP2 data is in GRNB order but we want BGRN
         self.band_order = torch.cat(
@@ -139,7 +139,7 @@ class HARP2Dataset(Dataset):
         self.img_shp = self.nc_data["observation_data/i"].shape[1:]  # image dims
 
         def _parse_field(
-            field: netCDF4._netCDF4.Variable,
+            field: netCDF4.Variable,
         ) -> npt.NDArray[np.float32]:
             """Read a field in HARP2 L1B data, performing the following transformations:
             1) fill invalid values with nan

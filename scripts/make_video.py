@@ -122,7 +122,7 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     args = parse_args()
-    ncdata = netCDF4._netCDF4.Dataset(args.extract_filepath)
+    ncdata = netCDF4.Dataset(args.extract_filepath)
     # flip the netCDF data along the altitude dimension
     sigma = ncdata["extinction_coefficient"][:, :, ::-1, 2].filled(fill_value=np.nan)
     # swap axes so we're not in left-handed coords and so height is on the y-axis

@@ -231,6 +231,9 @@ class HARP2Dataset(Dataset):
         Returns:
             metrics: A dictionary of metric names and their values.
         """
+        # clip image before image metrics since intensities are max-normalized
+        pred_img = torch.clip(pred_img, min=0, max=1)
+
         data_range = (target_img.max() - target_img.min()).item()
         psnr = torch.zeros(90, device=self.band_order.device)
         ssim = torch.zeros(90, device=self.band_order.device)

@@ -4,13 +4,14 @@ from typing import Any, Mapping
 import tinycudann as tcnn
 import torch
 import torch.nn.functional as F
-from torch.optim import AdamW, Optimizer
+from torch.optim import Adam, Optimizer
 from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn  # type: ignore
 
 from atmonr.datasets.factory import Dataset
+from atmonr.losses import hdr_loss
 from atmonr.pipelines.pipeline import Pipeline
 from atmonr.render import render
-from atmonr.samplers import append_heights, sample_uniform_bins
+from atmonr.samplers import append_heights, sample_biased_bins
 
 
 class InstantNGPPipeline(Pipeline):
@@ -35,6 +36,10 @@ class InstantNGPPipeline(Pipeline):
             dataset: Dataset to which this pipeline will be applied.
         """
         super().__init__(config, dataset)
+
+        self.num_density_outputs = 1
+        if self.config["multi_band_extinction"]:
+            self.num_density_outputs = self.config["num_bands"]
 
         num_inputs = 4 if self.config["include_height"] else 3
 
@@ -77,6 +82,12 @@ class InstantNGPPipeline(Pipeline):
             self.avg_dir_model = None
         self.training = True
 
+        assert self.config["loss"] in ["mse", "hdr"]
+        if self.config["loss"] == "mse":
+            self.loss_fn = F.mse_loss
+        else:
+            self.loss_fn = hdr_loss
+
     def send_tensors_to(self, device: int) -> None:
         """Move the relevant tensors to a CUDA-capable device.
 
@@ -94,7 +105,7 @@ class InstantNGPPipeline(Pipeline):
         mlp_params = chain(
             self.pos_model[1].parameters(), self.dir_model[1].parameters()
         )
-        optimizer = AdamW(
+        optimizer = Adam(
             [
                 {"params": enc_params, "weight_decay": 0},
                 {"params": mlp_params},
@@ -112,11 +123,18 @@ class InstantNGPPipeline(Pipeline):
             results: Results, including densities and colors.
         """
         B_ = ray_batch["origin"].shape[0]
-        N = 192
-        pts, z_vals = sample_uniform_bins(ray_batch, n_bins=N)
+        N = self.config["num_samples_per_ray"]
+        pts, z_vals = sample_biased_bins(
+            ray_batch,
+            N,
+            ray_origin_height=self.config["ray_origin_height"],
+            subsurface_depth=self.config["subsurface_depth"],
+            alpha=0.2,
+        )
 
+        subsurface_mask = None
         if self.point_preprocessor:
-            pts = self.point_preprocessor(pts)
+            pts, subsurface_mask = self.point_preprocessor(pts)
 
         # Instant-NGP uses [0, 1], not [-1, 1]
         pts = (pts + 1) / 2
@@ -135,11 +153,23 @@ class InstantNGPPipeline(Pipeline):
         color = self.dir_model(torch.cat([dirs, pos_out], dim=1))
         color = color.view(B_, N, self.config["num_bands"])
 
-        # the first num_bands values of the intermediate output are treated as densities
-        sigma = pos_out[..., : self.config["num_bands"]].view(B_, N, -1)
+        # pull the densities out of the intermediate output
+        sigma = pos_out[..., : self.num_density_outputs].view(B_, N, -1)
+
+        # exponential activation for color, clamp to 11 to avoid overflow w/ float16
+        color = torch.exp(torch.clamp(color, max=11))
+
+        # ReLU activation for density as it should be non-negative
+        sigma = F.relu(sigma)
+
+        if subsurface_mask is not None:
+            # set subsurface densities to a high number
+            sigma_surface = torch.zeros_like(sigma, requires_grad=False)
+            sigma_surface[subsurface_mask] = 1000
+            sigma = torch.maximum(sigma, sigma_surface)
 
         # volume rendering
-        color_map, weights = render(z_vals, color, sigma)
+        color_map, weights = render(z_vals * (self.scale / 1000), color, sigma)
 
         results = {
             "color_fine": color,
@@ -147,6 +177,7 @@ class InstantNGPPipeline(Pipeline):
             "color_map_fine": color_map,
             "weights_fine": weights,
             "z_vals_fine": z_vals,
+            "subsurface_mask": subsurface_mask,
         }
         if self.config["include_height"]:
             results["norm_heights_fine"] = pts[..., 3]
@@ -164,8 +195,11 @@ class InstantNGPPipeline(Pipeline):
             sigma: Extinction coefficient at the provided points.
         """
         # if we have a point preprocessing function, use it
+        subsurface_mask = None
         if self.point_preprocessor:
-            pts = self.point_preprocessor(pts[None])[0]
+            pts, subsurface_mask = self.point_preprocessor(pts[None])
+            pts, subsurface_mask = pts[0], subsurface_mask[0]
+
         # Instant-NGP uses [0, 1], not [-1, 1]
         pts = (pts + 1) / 2
         # add height above surface to the points vector, if specified in the config
@@ -178,28 +212,34 @@ class InstantNGPPipeline(Pipeline):
 
         # the first num_bands values of the intermediate output are treated as densities
         sigma = torch.clip(
-            pos_out[..., : self.config["num_bands"]].view(
-                pts.shape[0], self.config["num_bands"]
+            pos_out[..., : self.num_density_outputs].view(
+                pts.shape[0], self.num_density_outputs
             ),
             min=0,
         )
+
+        if subsurface_mask is not None:
+            # set subsurface densities to a high number
+            sigma[subsurface_mask] = 1000
+
         return sigma
 
     def compute_loss(
         self, ray_batch: Mapping[str, torch.Tensor], results: dict[str, torch.Tensor]
     ) -> torch.Tensor:
-        """Compute the Huber loss.
+        """Compute the loss.
         Args:
             ray_batch: A batch of rays and associated observations.
             results: Results from the forward pass of Instant NGP.
         Returns:
-            loss: Huber loss of results with respect to this batch.
+            loss: Loss of results with respect to this batch.
         """
         results_indexed = torch.take_along_dim(
             results["color_map_fine"], ray_batch["band_idx"][:, None], 1
         )[:, 0]
-        loss = F.huber_loss(results_indexed, ray_batch["rad"])
-        return loss
+        gt = ray_batch["rad"].to(dtype=results_indexed.dtype)
+
+        return self.loss_fn(results_indexed, gt)
 
     def update_parameters(self) -> None:
         """Update parameters with weight averaging."""

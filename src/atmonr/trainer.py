@@ -125,7 +125,7 @@ class Trainer:
                     results["color_map_fine"], batch["band_idx"][:, None], 1
                 )[:, 0]
                 progress.pred_pixels[batch["idx"].cpu().numpy()] = (
-                    pred_pixels.detach().cpu().numpy()
+                    pred_pixels.detach().cpu().float().numpy()
                 )
 
                 # quit if enough iters

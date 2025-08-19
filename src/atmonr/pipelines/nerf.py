@@ -148,24 +148,14 @@ class NeRFPipeline(Pipeline):
         else:
             sigma = sigma.view(B_, N, -1)
 
-        # # volume rendering, with background appended
-        # bg_diff = z_vals[..., -1:] - z_vals[..., -2:-1]
-        # z_bg = z_vals[..., -1:] + bg_diff
-        # color_bg = torch.zeros_like(color[:, 0:1])
-        # if self.training:
-        #     color_bg.uniform_()  # make background noisy when training
-        # # sigma_bg = torch.zeros_like(sigma[:, 0:1]) + 1e3
-        # sigma_bg = (2.3 / bg_diff[:, None])  # corresponds to 99% transmittance
-        # sigma_bg = sigma_bg.repeat((1, 1, sigma.shape[2]))
-        # color_map, weights = render(
-        #     torch.cat([z_vals, z_bg], dim=1),
-        #     torch.cat([color, color_bg], dim=1),
-        #     torch.cat([sigma, sigma_bg], dim=1),
-        # )
-        # weights = weights[:, :-1]
+        # exponential activation for color, clamp to 11 to avoid overflow w/ float16
+        color = torch.exp(torch.clamp(color, max=11))
+
+        # ReLU activation for density as it should be non-negative
+        sigma = F.relu(sigma)
 
         # volume rendering
-        color_map, weights = render(z_vals, color, sigma)
+        color_map, weights = render(z_vals * (self.scale / 1000), color, sigma)
 
         results = {
             f"color_{mode}": color,

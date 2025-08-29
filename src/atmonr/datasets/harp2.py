@@ -165,23 +165,37 @@ class HARP2Dataset(Dataset):
 
     def _parse_ray_data(self) -> None:
         """Parse the relevant data from the netCDF file."""
-        self.img_shp = self.nc_data["observation_data/i"].shape[1:]  # image dims
+        level = self.nc_data.processing_level
+        assert level in ["L1B", "L1C"]
+        if level == "L1B":
+            self.img_shp = self.nc_data["observation_data/i"].shape[1:]
+        else:
+            self.img_shp = self.nc_data["observation_data/i"].shape[:2]
 
         def _parse_field(
             field: netCDF4.Variable,
         ) -> npt.NDArray[np.float32]:
-            """Read a field in HARP2 L1B data, performing the following transformations:
-            1) fill invalid values with nan
-            2) reshape so the angle dimension is last
-            3) flip the y-axis so North is at the top of the image
-            4) flatten the image dimensions
+            """Read a field in HARP2 L1B/L1C data, making sure that:
+            1) invalid values are filled with nan
+            2) the angle dimension is last
+            3) North is at the top of the image
+            4) the image dimensions are flattened
             """
             arr = field[:].filled(fill_value=np.nan)
-            return np.reshape(np.transpose(arr, (1, 2, 0))[::-1], (-1, 90))
+            if level == "L1B":
+                return np.reshape(np.transpose(arr, (1, 2, 0))[::-1], (-1, 90))
+            if len(arr.shape) == 4:
+                return np.reshape(arr[::-1, ..., 0], (-1, 90))
+            if len(arr.shape) == 3:
+                return np.reshape(arr[::-1], (-1, 90))
+            return np.reshape(np.tile(arr[..., None], (1, 1, 90))[::-1], (-1, 90))
 
         lat = _parse_field(self.nc_data["geolocation_data/latitude"])
         lon = _parse_field(self.nc_data["geolocation_data/longitude"])
-        alt = _parse_field(self.nc_data["geolocation_data/surface_altitude"])
+        if level == "L1B":
+            alt = _parse_field(self.nc_data["geolocation_data/surface_altitude"])
+        else:
+            alt = _parse_field(self.nc_data["geolocation_data/height"])
         i = _parse_field(self.nc_data["observation_data/i"])
         # NOTE: don't scale viewing geometry, the scale_factor and add_offset are wrong
         thetav = _parse_field(self.nc_data["geolocation_data/sensor_zenith_angle"])

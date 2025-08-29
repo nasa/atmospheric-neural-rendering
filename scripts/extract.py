@@ -9,7 +9,7 @@ import warnings
 
 import torch
 from torch.cuda import current_device
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 
 from atmonr.datasets.factory import BANDS, get_dataset, get_extract_dataset
 from atmonr.pipelines.factory import get_pipeline
@@ -49,7 +49,7 @@ def parse_args() -> argparse.Namespace:
         "This file will be placed in the experiment directory.",
     )
     parser.add_argument(
-        "--batch-size", type=int, default=8192, help="Batch size for inference."
+        "--batch-size", type=int, default=32768, help="Batch size for inference."
     )
     parser.add_argument(
         "--min-alt",
@@ -69,7 +69,7 @@ def parse_args() -> argparse.Namespace:
         "i.e. vertical resolution.",
     )
     parser.add_argument(
-        "---horizontal-step",
+        "--horizontal-step",
         type=float,
         default=3000.0,
         help="Horizontal step size (meters) between adjacent voxels at the same "
@@ -140,7 +140,7 @@ def main() -> None:
     # get most recent checkpoint using epoch number and load it
     ckpts = list(output_path.glob("epoch_*.pt"))
     last_ckpt_path = sorted(ckpts, key=lambda c: int(c.stem.split("_")[1]))[-1]
-    pipeline.load_state_dict(torch.load(last_ckpt_path)["pipeline"])
+    pipeline.load_state_dict(torch.load(last_ckpt_path, weights_only=False)["pipeline"])
 
     sigma = torch.zeros(
         (extract_dataset.idx.shape[0], BANDS[config["data_type"]]), device=device

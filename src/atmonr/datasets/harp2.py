@@ -14,7 +14,7 @@ from torchmetrics.functional.image import (
     structural_similarity_index_measure,
 )
 
-from atmonr.geometry import (
+from atmonr.geospatial.wgs_84 import (
     cartesian_to_horizontal,
     filter_rays,
     get_rays,

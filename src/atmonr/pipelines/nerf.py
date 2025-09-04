@@ -7,9 +7,9 @@ from torch.optim import Adam, Optimizer
 
 from atmonr.datasets.factory import Dataset
 from atmonr.encoders import positional_encoding
+from atmonr.graphics_utils import render
 from atmonr.models.nerf import get_model
 from atmonr.pipelines.pipeline import Pipeline
-from atmonr.render import render
 from atmonr.samplers import append_heights, sample_pdf, sample_uniform_bins
 
 

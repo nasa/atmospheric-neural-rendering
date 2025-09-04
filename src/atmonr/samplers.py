@@ -2,7 +2,7 @@ from typing import Mapping
 
 import torch
 
-from atmonr.geometry import cartesian_to_horizontal
+from atmonr.geospatial.wgs_84 import cartesian_to_horizontal
 
 
 def sample_uniform_bins(

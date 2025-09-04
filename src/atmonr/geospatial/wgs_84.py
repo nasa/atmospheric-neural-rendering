@@ -1,10 +1,13 @@
-"""A set of geometry utilities for working with viewing rays in various 3D reference
-frames. This repository uses the following frames of reference:
+"""A set of geospatial functions for conversions between WGS-84 horizontal, WGS-84
+Cartesian, and normalized Cartesian scene coordinates. More specifically, the reference
+frames used here are:
 1) WGS-84 ellipsoid, horizontal coordinates, EPSG code: 4326 https://epsg.io/4326
 2) WGS-84 ellipsoid, Cartesian coordinates, EPSG code: 4978 https://epsg.io/4978
 3) Normalized Cartesian scene coordinates, with +X=East, +Y=North, and +Z=up for the
     center pixel, and locations centered around the scene center and max-min normalized
     between -1 and 1.
+These functions use torch tensors and are 'device-aware' because single-threaded
+geospatial operations on CPU are too slow to keep up with many neural rendering models.
 """
 
 import numpy as np

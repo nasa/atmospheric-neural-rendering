@@ -1,3 +1,5 @@
+"""Miscellaneous utilities."""
+
 from typing import Mapping
 import json
 

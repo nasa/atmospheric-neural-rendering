@@ -1,3 +1,5 @@
+"""Various utilities related to computer graphics."""
+
 import torch
 
 

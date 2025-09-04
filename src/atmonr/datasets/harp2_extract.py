@@ -6,7 +6,7 @@ import torch
 from torch.utils.data import Dataset
 
 from atmonr.datasets.harp2 import HARP2Dataset, download_harp2_file
-from atmonr.geometry import (
+from atmonr.geospatial.wgs_84 import (
     horizontal_to_cartesian,
     vincenty_distance,
     vincenty_point_along_geodesic,

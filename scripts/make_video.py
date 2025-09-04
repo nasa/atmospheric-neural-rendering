@@ -7,7 +7,16 @@ import warnings
 
 import netCDF4
 import numpy as np
-import pyopenvdb as vdb
+
+try:
+    import pyopenvdb as vdb  # type: ignore
+except ImportError:
+    try:
+        import openvdb as vdb  # type: ignore
+    except ImportError:
+        raise ImportError(
+            "You must have openvdb Python bindings installed to use make_video.py"
+        )
 from tqdm import tqdm
 
 

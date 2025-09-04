@@ -2,7 +2,6 @@
 
 import argparse
 import json
-import os
 from pathlib import Path
 from types import SimpleNamespace
 import warnings
@@ -12,12 +11,9 @@ from torch.cuda import current_device
 from tqdm import tqdm
 
 from atmonr.datasets.factory import BANDS, get_dataset, get_extract_dataset
+from atmonr.geospatial.spherical import EARTH_RADIUS
 from atmonr.pipelines.factory import get_pipeline
 from atmonr.batch_loader import BatchLoader
-
-
-if os.getcwd().split("/")[-1] == "notebooks":
-    os.chdir("..")
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,49 +33,77 @@ def parse_args() -> argparse.Namespace:
         "--coord-mode",
         type=str,
         required=True,
-        help="Either 'native' or 'voxelgrid'. The coordinates of the extracted volume "
-        "can either match the native resolution / locations of the training data, or "
-        "use a user-supplied voxel grid, defined by --horizontal-step.",
+        help="Either 'l1c', 'voxelgrid', or 'globalgrid'. The coordinates of the "
+        "extracted volume can either match the native resolution / locations of the "
+        "training data, use a user-supplied voxel grid, defined by --horizontal-step, "
+        "or use a voxel grid in spherical Earth coordinate frame.",
     )
     parser.add_argument(
         "--extract-filename",
         type=str,
         required=True,
-        help="Name of the output netCDF file containing the extracted volumetric data. "
-        "This file will be placed in the experiment directory.",
+        help="Name of the output file containing the extracted volumetric data. This "
+        "file will be placed in the experiment directory.",
     )
     parser.add_argument(
-        "--batch-size", type=int, default=32768, help="Batch size for inference."
+        "--batch-size",
+        type=int,
+        default=32768,
+        help="Batch size for inference. Default: 32768",
     )
     parser.add_argument(
         "--min-alt",
         type=float,
-        help="Minimum above-surface altitude (meters) of the voxel grid.",
+        help="Minimum above-surface altitude (meters) of the voxel grid. Used in "
+        "l1c and voxelgrid modes. Default: -1 * subsurface_depth",
     )
     parser.add_argument(
         "--max-alt",
         type=float,
-        help="Maximum above-surface altitude (meters) of the voxel grid.",
+        help="Maximum above-surface altitude (meters) of the voxel grid. Used in "
+        "l1c and voxelgrid modes. Default: ray_origin_height",
     )
     parser.add_argument(
         "--alt-step",
         type=float,
         default=250.0,
         help="Altitude step size (meters) between adjacent voxels in the same column, "
-        "i.e. vertical resolution.",
+        "i.e. vertical resolution. Used in l1c and voxelgrid modes. Default: 250.0",
     )
     parser.add_argument(
         "--horizontal-step",
         type=float,
         default=3000.0,
         help="Horizontal step size (meters) between adjacent voxels at the same "
-        "altitude, i.e. horizontal resolution.",
+        "altitude, i.e. horizontal resolution. Used in voxelgrid mode. Default: 3000.0",
     )
-    parser.add_argument
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=100 / EARTH_RADIUS,
+        help="Scale of the global voxel grid in globalgrid mode. Default: "
+        "100/EARTH_RADIUS",
+    )
+    parser.add_argument(
+        "--grid-res",
+        type=float,
+        default=0.025,
+        help="Size of voxels in globalgrid mode. Default: 0.025",
+    )
+    parser.add_argument(
+        "--vstretch",
+        type=float,
+        default=12,
+        help="How much to scale up the above-surface points to visually exaggerate the "
+        "atmosphere on a global scale. Used in globalgrid mode. Default: 12",
+    )
     args = parser.parse_args()
-    assert Path(f"data/output/{args.exp_name}").exists()
-    assert args.coord_mode in ["native", "voxelgrid"]
+    args.coord_mode = args.coord_mode.lower()
+    assert args.coord_mode in ["l1c", "voxelgrid", "spherical", "globalgrid"]
     assert args.alt_step > 0 and args.horizontal_step > 0
+    assert args.scale > 0
+    assert args.grid_res > 0
+    assert args.vstretch >= 1
     if args.alt_step <= 50:
         warnings.warn(
             f"Provided --alt-step of {args.alt_step} is very low and may "
@@ -125,8 +149,7 @@ def main() -> None:
         args.coord_mode,
         config["data_type"],
         dataset,
-        args.horizontal_step,
-        sample_alt,
+        **vars(args),
     )
     dataloader = BatchLoader(
         extract_dataset, batch_size=args.batch_size * sample_alt.shape[0], shuffle=False
@@ -142,9 +165,11 @@ def main() -> None:
     last_ckpt_path = sorted(ckpts, key=lambda c: int(c.stem.split("_")[1]))[-1]
     pipeline.load_state_dict(torch.load(last_ckpt_path, weights_only=False)["pipeline"])
 
-    sigma = torch.zeros(
-        (extract_dataset.idx.shape[0], BANDS[config["data_type"]]), device=device
-    )
+    if config["pipeline"]["multi_band_extinction"]:
+        num_bands = BANDS[config["data_type"]]
+    else:
+        num_bands = 1
+    sigma = torch.zeros((extract_dataset.idx.shape[0], num_bands), device=device)
 
     for batch in tqdm(dataloader):
         xyz = batch["xyz"]
@@ -154,7 +179,7 @@ def main() -> None:
             sigma_batch = pipeline.extract(pts).to(dtype=sigma.dtype)
             sigma[batch["idx"]] = sigma_batch.detach() / dataset.scale
 
-    extract_dataset.write_netcdf(output_path / args.extract_filename, sigma)
+    extract_dataset.dump(output_path / args.extract_filename, sigma)
 
 
 if __name__ == "__main__":

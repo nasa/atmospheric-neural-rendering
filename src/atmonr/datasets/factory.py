@@ -1,7 +1,10 @@
-import torch
-
 from atmonr.datasets.harp2 import HARP2Dataset
-from atmonr.datasets.harp2_extract import HARP2ExtractDataset
+from atmonr.datasets.harp2_extract import (
+    HARP2ExtractDataset,
+    HARP2L1CExtractDataset,
+    HARP2VoxelGridExtractDataset,
+    HARP2GlobalGridExtractDataset,
+)
 
 
 BANDS = {
@@ -19,7 +22,11 @@ datasets = {
     # Not yet implemented: AirHARP
 }
 extract_datasets = {
-    "HARP2": HARP2ExtractDataset,
+    "HARP2": {
+        "l1c": HARP2L1CExtractDataset,
+        "voxelgrid": HARP2VoxelGridExtractDataset,
+        "globalgrid": HARP2GlobalGridExtractDataset,
+    },
     # Not yet implemented: AirHARP
 }
 
@@ -57,8 +64,8 @@ def get_extract_dataset(
     mode: str,
     data_type: str,
     dataset: Dataset,
-    horizontal_step: float,
-    sample_alt: torch.Tensor,
+    *args,
+    **kwargs,
 ) -> ExtractDataset:
     """Get an ExtractDataset which corresponds to an existing Dataset.
 
@@ -66,8 +73,6 @@ def get_extract_dataset(
         mode: The extract mode, which defines the behavior of the ExtractDataset.
         data_type: The data_type for this ExtractDataset.
         dataset: The dataset from which to extract.
-        horizontal_step: The horizontal step size in meters between samples.
-        sample_alt: The altitudes at which to take samples.
 
     Returns:
         e_dataset: ExtractDataset for provided Dataset.
@@ -76,10 +81,9 @@ def get_extract_dataset(
         raise NotImplementedError(
             f"ExtractDataset data_type '{data_type}' is unrecognized!"
         )
-    e_dataset = extract_datasets[data_type](
-        mode=mode,
-        dataset=dataset,
-        horizontal_step=horizontal_step,
-        sample_alt=sample_alt,
+    e_dataset = extract_datasets[data_type][mode.lower()](
+        dataset,
+        *args,
+        **kwargs,
     )
     return e_dataset

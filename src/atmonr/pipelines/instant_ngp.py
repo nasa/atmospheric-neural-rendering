@@ -8,9 +8,9 @@ from torch.optim import Adam, Optimizer
 from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn  # type: ignore
 
 from atmonr.datasets.factory import Dataset
+from atmonr.graphics_utils import render
 from atmonr.losses import hdr_loss
 from atmonr.pipelines.pipeline import Pipeline
-from atmonr.render import render
 from atmonr.samplers import append_heights, sample_biased_bins
 
 

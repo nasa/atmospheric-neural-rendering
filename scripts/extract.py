@@ -2,7 +2,6 @@
 
 import argparse
 import json
-import os
 from pathlib import Path
 from types import SimpleNamespace
 import warnings
@@ -14,10 +13,6 @@ from tqdm import tqdm
 from atmonr.datasets.factory import BANDS, get_dataset, get_extract_dataset
 from atmonr.pipelines.factory import get_pipeline
 from atmonr.batch_loader import BatchLoader
-
-
-if os.getcwd().split("/")[-1] == "notebooks":
-    os.chdir("..")
 
 
 def parse_args() -> argparse.Namespace:

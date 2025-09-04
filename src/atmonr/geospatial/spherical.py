@@ -28,7 +28,9 @@ def stretch_above_sea_level(xyz: torch.Tensor, stretch: float):
     radii = torch.linalg.norm(xyz, dim=-1)
     above_surf = radii > EARTH_RADIUS
     rad_stretch = radii.clone()
-    rad_stretch[above_surf] = (radii[above_surf] - EARTH_RADIUS) * stretch + EARTH_RADIUS
+    rad_stretch[above_surf] = (
+        radii[above_surf] - EARTH_RADIUS
+    ) * stretch + EARTH_RADIUS
     xyz_stretch = torch.clone(xyz)
     xyz_stretch[above_surf] *= (rad_stretch[above_surf] / radii[above_surf])[:, None]
     return xyz_stretch

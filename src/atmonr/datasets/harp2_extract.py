@@ -2,71 +2,141 @@ from pathlib import Path
 
 import netCDF4
 import numpy as np
+
+try:
+    import openvdb as vdb  # type: ignore
+except ImportError:
+    try:
+        import pyopenvdb as vdb  # type: ignore
+    except ImportError:
+        vdb = None
 import torch
 from torch.utils.data import Dataset
+from tqdm import tqdm
+import warnings
 
 from atmonr.datasets.harp2 import HARP2Dataset, download_harp2_file
+from atmonr.geospatial.spherical import (
+    wgs_84_to_spherical,
+    spherical_to_wgs84,
+    stretch_above_sea_level,
+)
 from atmonr.geospatial.wgs_84 import (
+    cartesian_to_horizontal,
     horizontal_to_cartesian,
     vincenty_distance,
     vincenty_point_along_geodesic,
 )
+from atmonr.graphics_utils import voxel_traversal
 
 
+_CHUNK_SIZE = int(5e4)
 DEM_PATH = "data/ETOPO1_ocssw.nc"
 
 
 class HARP2ExtractDataset(Dataset):
-    """ExtractDataset for getting the extinction coefficient field from a HARP2Dataset.
+    """Dataset for getting the extinction coefficient field from a HARP2Dataset.
 
-    Defines a 3D grid over a HARP2Dataset, using the provided mode, horizontal_step, and
-    sample_alt, and allows iteration over this grid.
+    This class is abstract and should not be directly instantiated.
+    """
 
-    The `mode` should be "native" or "voxelgrid". In "native" mode, this ExtractDataset
-    loads the level 1C data (downloading it if necessary) corresponding to the level 1B
-    file in the provided HARP2Dataset, and uses the level 1C latitude and longitude to
-    define the grid. Using the level 1B latitude and longitude is not practical due to
-    their angle-dependence and relatively non-uniform spacing. In "voxelgrid" mode, the
-    provided horizontal_step and sample_alt are used to define a grid of nearly uniform
-    voxel-like cells.
+    def __init__(self, dataset: HARP2Dataset) -> None:
+        if type(self) is HARP2ExtractDataset:
+            raise NotImplementedError
+        super().__init__()
+        self.dataset = dataset
+        self.device = dataset.lat.device
+        self.shp = (0, 0)
+        self.xyz = torch.zeros(0, device=self.device)
+        self.idx = torch.zeros(0, dtype=torch.int32, device=self.device)
+
+    def __getitem__(self, idx: int | torch.Tensor) -> dict[str, torch.Tensor]:
+        return {
+            "xyz": self.xyz[idx],
+            "idx": self.idx[idx],
+        }
+
+    def __getbatch__(self, idx: torch.Tensor) -> dict[str, torch.Tensor]:
+        return self[idx]
+
+    def dump(
+        self,
+        output_filepath: Path,
+        sigma: torch.Tensor,
+    ) -> None:
+        raise NotImplementedError
+
+
+class _HARP2LocalExtractDataset(HARP2ExtractDataset):
+    """HARP2ExtractDataset for local, i.e. non-global, grids.
+
+    This class is abstract and should not be instantiated.
     """
 
     def __init__(
         self,
-        mode: str,
         dataset: HARP2Dataset,
-        horizontal_step: float,
-        sample_alt: torch.Tensor,
+        alt_step: float,
+        min_alt: float | None = None,
+        max_alt: float | None = None,
+        *args,
+        **kwargs,
     ) -> None:
-        """Initialize a HARP2ExtractDataset.
+        if type(self) is _HARP2LocalExtractDataset:
+            raise NotImplementedError
+        super().__init__(dataset)
+        self.alt_step = alt_step
+        self.min_alt = -self.dataset.subsurface_depth if min_alt is None else min_alt
+        self.max_alt = self.dataset.ray_origin_height if max_alt is None else max_alt
+        self.sample_alt = torch.arange(
+            self.min_alt,
+            self.max_alt + self.alt_step / 2,
+            self.alt_step,
+        ).to(self.device)
+
+    def dump(
+        self,
+        output_filepath: Path,
+        sigma: torch.Tensor,
+    ) -> None:
+        """Dump this dataset to a netCDF file.
 
         Args:
-            mode: Extraction mode, either "native" or "voxelgrid".
-            dataset: The HARP2Dataset from which to extract the extinction coefficient.
-            horizontal_step: Horizontal spacing in meters between cells. Only used in
-                "voxelgrid" mode.
-            sample_alt: Sample altitudes defining the vertical spacing between cells.
+            output_filepath: Path to a .netCDF file in which to dump the data.
+            sigma: The 3D field of the extinction coefficient.
         """
-        super().__init__()
 
-        assert mode in ["native", "voxelgrid"]
-        self.mode = mode
-        self.dataset = dataset
-        self.horizontal_step = horizontal_step
-        self.sample_alt = sample_alt
+        _extract_to_netCDF(output_filepath, self, sigma)
 
-        self.device = dataset.lat.device
 
-        if self.mode == "native":
-            self._init_native_grid()
-        else:
-            self._init_voxel_grid()
-        self.idx = torch.arange(self.xyz.shape[0], dtype=torch.int32)
+class HARP2L1CExtractDataset(_HARP2LocalExtractDataset):
+    """Implementation of HARP2LocalExtractDataset for the L1C grid. This loads the level
+    1C data (downloading it if necessary) corresponding to the level 1B file in the
+    provided HARP2Dataset, and uses the level 1C latitude and longitude to define the
+    horizontal spacing of the grid. Using the level 1B latitude and longitude is not
+    ideal for visualization due to their angle-dependence and relatively non-uniform
+    spacing. The vertical spacing of the grid is defined by the user.
+    """
 
-    def _init_native_grid(self) -> None:
-        """Initialize the native mode grid, defined by the latitude and longitude in the
-        level 1C data and a user-configured sample altitudes."""
-        # get the corresponding L1C filename download it if it's missing
+    def __init__(
+        self,
+        dataset: HARP2Dataset,
+        alt_step: float,
+        min_alt: float | None = None,
+        max_alt: float | None = None,
+        *args,
+        **kwargs,
+    ) -> None:
+        """Initialize a HARP2L1CExtractDataset.
+
+        Args:
+            alt_step: Vertical spacing between voxels, in meters.
+            min_alt: Minimum altitude above sea-level of the voxel grid, in meters.
+            max_alt: Maximum altitude above sea-level of the voxel grid, in meters.
+        """
+        super().__init__(dataset, alt_step, min_alt, max_alt)
+
+        # get the corresponding l1c filename download it if it's missing
         sensor, timestamp, _, version, _ = self.dataset.filename.split(".")
         l1c_filename = f"{sensor}.{timestamp}.L1C.{version}.5km.nc"
         l1c_path = Path("data/HARP2_L1C") / l1c_filename
@@ -109,10 +179,40 @@ class HARP2ExtractDataset(Dataset):
             dim=-1,
         )
         self.xyz = xyz.view(-1, 3)
+        self.idx = torch.arange(self.xyz.shape[0], dtype=torch.int32)
 
-    def _init_voxel_grid(self) -> None:
-        """Initialize a voxelgrid mode grid, defined by the user-configured horizontal
-        spacing and sample altitudes."""
+
+class HARP2VoxelGridExtractDataset(_HARP2LocalExtractDataset):
+    """Implementation of HARP2LocalExtractDataset for a user-defined voxel grid. This
+    grid attempts to keep horizontal spacing as uniform as possible, despite Earth
+    curvature, by using the Vincenty distance.
+    """
+
+    def __init__(
+        self,
+        dataset: HARP2Dataset,
+        horizontal_step: float,
+        alt_step: float,
+        min_alt: float | None = None,
+        max_alt: float | None = None,
+        *args,
+        **kwargs,
+    ) -> None:
+        """Initialize a HARP2VoxelGridExtractDataset.
+
+        Args:
+            horizontal_step: Horizontal spacing between voxels, in meters.
+            alt_step: Vertical spacing between voxels, in meters.
+            min_alt: Minimum altitude above sea-level of the voxel grid, in meters.
+            max_alt: Maximum altitude above sea-level of the voxel grid, in meters.
+        """
+        super().__init__(dataset, alt_step, min_alt, max_alt)
+
+        self.horizontal_step = horizontal_step
+        self.alt_step = alt_step
+        self.min_alt = -self.dataset.subsurface_depth if min_alt is None else min_alt
+        self.max_alt = self.dataset.ray_origin_height if max_alt is None else max_alt
+
         # get bounding lat/lon, making 2 assumptions:
         # 1) the lat/lon arrays are ordered so u is decreasing in latitude and v is increasing in longitude
         # 2) the corners of the lat/lon arrays have at least one valid value
@@ -234,6 +334,7 @@ class HARP2ExtractDataset(Dataset):
 
         self.shp = self.lat.shape
         self.xyz = xyz.view(-1, 3)
+        self.idx = torch.arange(self.xyz.shape[0], dtype=torch.int32)
 
     def _interp_dem_height(
         self,
@@ -313,165 +414,309 @@ class HARP2ExtractDataset(Dataset):
         interp_height = torch.clamp(interp_height, min=0)
         return interp_height
 
-    def __getitem__(self, idx: int | torch.Tensor) -> dict[str, torch.Tensor]:
-        return {
-            "xyz": self.xyz[idx],
-            "idx": self.idx[idx],
-        }
 
-    def __getbatch__(self, idx: torch.Tensor) -> dict[str, torch.Tensor]:
-        return self[idx]
+def _extract_to_netCDF(
+    output_filepath: Path,
+    extract_dataset: _HARP2LocalExtractDataset,
+    sigma: torch.Tensor,
+) -> None:
+    """Write a L1C or voxelgrid extract to a netCDF file.
 
-    def write_netcdf(self, output_filepath: Path, sigma: torch.Tensor) -> None:
-        """Write the extracted data to a netCDF file at the provided location.
+    Args:
+        output_filepath: The path of the output netCDF file.
+        extract_dataset: The extract dataset to write to file.
+        sigma: 3D field of the extinction coefficient as a torch tensor.
+    """
+    assert output_filepath.suffix == ".nc"
+    assert isinstance(
+        extract_dataset, HARP2L1CExtractDataset | HARP2VoxelGridExtractDataset
+    )
+
+    num_bands = sigma.shape[-1]
+    sigma = sigma.view(
+        list(extract_dataset.shp[:2]) + [extract_dataset.sample_alt.shape[0], num_bands]
+    )
+    ncfile = netCDF4.Dataset(output_filepath, mode="w")
+
+    # dimensions
+    ncfile.createDimension("bins_along_track", extract_dataset.lat.shape[0])
+    ncfile.createDimension("bins_across_track", extract_dataset.lat.shape[1])
+    ncfile.createDimension("bins_vertical", extract_dataset.sample_alt.shape[0])
+    ncfile.createDimension("number_of_bands", num_bands)
+    ncfile.createDimension("number_of_views", 90)
+
+    # attributes
+    ncfile.title = "PACE HARP2 Neural Rendering Volumetric Data"
+    ncfile.input_l1b_product_name = extract_dataset.dataset.nc_data.product_name
+    if isinstance(extract_dataset, HARP2L1CExtractDataset):
+        ncfile.input_l1c_product_name = extract_dataset.l1c_nc_data.product_name
+    ncfile.neural_rendering_scene_scale = extract_dataset.dataset.scale
+    ncfile.neural_rendering_scene_offset_x = extract_dataset.dataset.offset[0].item()
+    ncfile.neural_rendering_scene_offset_y = extract_dataset.dataset.offset[1].item()
+    ncfile.neural_rendering_scene_offset_z = extract_dataset.dataset.offset[2].item()
+
+    # Some geolocation attributes
+    lat = ncfile.createVariable(
+        "latitude",
+        np.float32,
+        ("bins_along_track", "bins_across_track"),
+        fill_value=-32767,
+    )
+    lon = ncfile.createVariable(
+        "longitude",
+        np.float32,
+        ("bins_along_track", "bins_across_track"),
+        fill_value=-32767,
+    )
+    height = ncfile.createVariable(
+        "height",
+        np.float32,
+        ("bins_along_track", "bins_across_track"),
+        fill_value=-32767,
+    )
+    solar_zen, solar_azi = None, None
+    if isinstance(extract_dataset, HARP2L1CExtractDataset):
+        solar_zen = ncfile.createVariable(
+            "solar_zenith_angle",
+            np.float32,
+            ("bins_along_track", "bins_across_track", "number_of_views"),
+            fill_value=-32767,
+        )
+        solar_azi = ncfile.createVariable(
+            "solar_azimuth_angle",
+            np.float32,
+            ("bins_along_track", "bins_across_track", "number_of_views"),
+            fill_value=-32767,
+        )
+
+    # if in L1C mode, copy over the geolocation data
+    def _copy_nc_var(src, dst):
+        dst.setncatts({k: v for k, v in src.__dict__.items() if k != "_FillValue"})
+        dst[:] = src[:]
+
+    if isinstance(extract_dataset, HARP2L1CExtractDataset):
+        _copy_nc_var(extract_dataset.l1c_nc_data["geolocation_data/latitude"], lat)
+        _copy_nc_var(extract_dataset.l1c_nc_data["geolocation_data/longitude"], lon)
+        _copy_nc_var(extract_dataset.l1c_nc_data["geolocation_data/height"], height)
+        _copy_nc_var(
+            extract_dataset.l1c_nc_data["geolocation_data/solar_zenith_angle"],
+            solar_zen,
+        )
+        _copy_nc_var(
+            extract_dataset.l1c_nc_data["geolocation_data/solar_azimuth_angle"],
+            solar_azi,
+        )
+    # otherwise, use our own
+    else:
+        lat.long_name = "Latitude of bin locations"
+        lat.units = "degrees_north"
+        lat.valid_min = -90.0
+        lat.valid_max = 90.0
+        lat[:] = extract_dataset.lat[..., 0].cpu().numpy()
+        lon.long_name = "Longitude of bin locations"
+        lon.units = "degrees_east"
+        lon.valid_min = -180.0
+        lon.valid_max = 180.0
+        lon[:] = extract_dataset.lon[..., 0].cpu().numpy()
+        height.long_name = "Altitude at bin locations"
+        height.units = "meters"
+        height.valid_min = -1000
+        height.valid_max = 10000
+        height[:] = extract_dataset.height.cpu().numpy()
+
+    # altitude
+    nc_sample_alt = ncfile.createVariable(
+        "altitude", np.float32, ("bins_vertical",), fill_value=-32767
+    )
+    nc_sample_alt.units = "meters"
+    nc_sample_alt.long_name = "Altitude above surface"
+    nc_sample_alt[:] = extract_dataset.sample_alt.cpu().numpy()
+
+    # extinction coefficient
+    nc_sigma = ncfile.createVariable(
+        "extinction_coefficient",
+        np.float32,
+        (
+            "bins_along_track",
+            "bins_across_track",
+            "bins_vertical",
+            "number_of_bands",
+        ),
+        fill_value=-32767,
+    )
+    nc_sigma.units = "m^-1"
+    nc_sigma.long_name = "Extinction coefficient"
+    nc_sigma.valid_min = 0
+    nc_sigma[:] = sigma.cpu().numpy()
+
+    # WGS-84 Cartesian XYZ
+    xyz_vg = (
+        extract_dataset.xyz.view(
+            list(extract_dataset.shp[:2]) + [extract_dataset.sample_alt.shape[0], 3]
+        )
+        .cpu()
+        .numpy()
+    )
+    nc_x = ncfile.createVariable(
+        "x_wgs84",
+        np.float32,
+        ("bins_along_track", "bins_across_track", "bins_vertical"),
+    )
+    nc_y = ncfile.createVariable(
+        "y_wgs84",
+        np.float32,
+        ("bins_along_track", "bins_across_track", "bins_vertical"),
+    )
+    nc_z = ncfile.createVariable(
+        "z_wgs84",
+        np.float32,
+        ("bins_along_track", "bins_across_track", "bins_vertical"),
+    )
+    nc_x.units = "meters"
+    nc_y.units = "meters"
+    nc_z.units = "meters"
+    nc_x.long_name = "X coordinate in WGS-84 cartesian (EPSG:4978)"
+    nc_y.long_name = "Y coordinate in WGS-84 cartesian (EPSG:4978)"
+    nc_z.long_name = "Z coordinate in WGS-84 cartesian (EPSG:4978)"
+    nc_x[:] = xyz_vg[..., 0]
+    nc_y[:] = xyz_vg[..., 1]
+    nc_z[:] = xyz_vg[..., 2]
+
+    ncfile.close()
+
+
+class HARP2GlobalGridExtractDataset(HARP2ExtractDataset):
+    """Implementation of HARP2ExtractDataset for a global voxel grid, for large-scale
+    visualization purposes. This dataset uses a spherical Earth reference frame and a
+    voxel grid with a user-provided scale and grid resolution. This mode also allows the
+    stretching of the atmosphere to make it easier to see vertical variability in large
+    scale visualizations.
+    """
+
+    def __init__(
+        self,
+        dataset: HARP2Dataset,
+        scale: float,
+        grid_res: float,
+        vstretch: float | None = None,
+        *args,
+        **kwargs,
+    ) -> None:
+        """Initialize a HARP2GlobalGridExtractDataset.
 
         Args:
-            output_filepath: Path where the extracted netCDF should be saved.
-            sigma: 3D field of the Extinction coefficient.
+            scale: Scale of the voxel grid.
+            grid_res: The voxel grid resolution in the provided scale.
+            vstretch: Factor by which to stretch the above-surface points.
         """
-        num_bands = sigma.shape[-1]
-        sigma = sigma.view(list(self.shp[:2]) + [self.sample_alt.shape[0], num_bands])
-        ncfile = netCDF4.Dataset(output_filepath, mode="w")
+        super().__init__(dataset)
 
-        # dimensions
-        ncfile.createDimension("bins_along_track", self.lat.shape[0])
-        ncfile.createDimension("bins_across_track", self.lat.shape[1])
-        ncfile.createDimension("bins_vertical", self.sample_alt.shape[0])
-        ncfile.createDimension("number_of_bands", num_bands)
-        ncfile.createDimension("number_of_views", 90)
+        if vstretch is None:
+            vstretch = 1
+        assert vstretch >= 1
 
-        # attributes
-        ncfile.title = "PACE HARP2 Neural Rendering Volumetric Data"
-        ncfile.input_l1b_product_name = self.dataset.nc_data.product_name
-        if self.mode == "native":
-            ncfile.input_l1c_product_name = self.l1c_nc_data.product_name
-        ncfile.neural_rendering_scene_scale = self.dataset.scale
-        ncfile.neural_rendering_scene_offset_x = self.dataset.offset[0].item()
-        ncfile.neural_rendering_scene_offset_y = self.dataset.offset[1].item()
-        ncfile.neural_rendering_scene_offset_z = self.dataset.offset[2].item()
-        ncfile.extract_mode = self.mode
+        self.scale = scale
+        self.grid_res = grid_res
+        self.vstretch = vstretch
 
-        # Some geolocation attributes
-        lat = ncfile.createVariable(
-            "latitude",
-            np.float32,
-            ("bins_along_track", "bins_across_track"),
-            fill_value=-32767,
+        # convert from WGS-84 to spherical
+        ray_origin = wgs_84_to_spherical(self.dataset.ray_origin)
+        ray_dest = (
+            self.dataset.ray_origin
+            + self.dataset.ray_dir * self.dataset.ray_len[:, None]
         )
-        lon = ncfile.createVariable(
-            "longitude",
-            np.float32,
-            ("bins_along_track", "bins_across_track"),
-            fill_value=-32767,
-        )
-        height = ncfile.createVariable(
-            "height",
-            np.float32,
-            ("bins_along_track", "bins_across_track"),
-            fill_value=-32767,
-        )
-        solar_zen, solar_azi = None, None
-        if self.mode == "native":
-            solar_zen = ncfile.createVariable(
-                "solar_zenith_angle",
-                np.float32,
-                ("bins_along_track", "bins_across_track", "number_of_views"),
-                fill_value=-32767,
+        ray_dest = wgs_84_to_spherical(ray_dest)
+
+        # stretch all points above sea level
+        ray_origin = stretch_above_sea_level(ray_origin, self.vstretch)
+        ray_dest = stretch_above_sea_level(ray_dest, self.vstretch)
+
+        # convert from spherical to continuous voxel grid indices
+        ray_origin *= self.scale / self.grid_res
+        ray_dest *= self.scale / self.grid_res
+
+        # voxel traversal in chunks to avoid running out of GPU memory
+        self.voxels = torch.zeros((0, 3)).to(device=self.device)
+        for i in tqdm(
+            range(ray_origin.shape[0] // _CHUNK_SIZE + 1),
+            desc="Traversing voxels",
+        ):
+            start = min(ray_origin.shape[0], i * _CHUNK_SIZE)
+            end = min(ray_origin.shape[0], start + _CHUNK_SIZE)
+            if start == end:
+                continue
+            self.voxels = torch.cat(
+                [
+                    self.voxels,
+                    voxel_traversal(
+                        ray_origin[start:end],
+                        ray_dest[start:end],
+                        unique_only=False,
+                    ),
+                ],
+                dim=0,
             )
-            solar_azi = ncfile.createVariable(
-                "solar_azimuth_angle",
-                np.float32,
-                ("bins_along_track", "bins_across_track", "number_of_views"),
-                fill_value=-32767,
+            # have to do this every chunk, or will run out of GPU memory
+            self.voxels = torch.unique(self.voxels, dim=0, sorted=False)
+        del (ray_origin, ray_dest)
+
+        # voxel centers in meters
+        self.xyz = (self.voxels.float() + 0.5) * (self.grid_res / scale)
+        # un-stretch using the reciprocal
+        self.xyz = stretch_above_sea_level(self.xyz, 1 / self.vstretch)
+        # convert back to WGS-84
+        self.xyz = spherical_to_wgs84(self.xyz)
+        # cull any voxels with centers above ray_origin_height or below surface
+        _, _, alt = cartesian_to_horizontal(
+            self.xyz[..., 0],
+            self.xyz[..., 1],
+            self.xyz[..., 2],
+        )
+        cull = alt <= 0
+        if self.dataset.ray_origin_height is not None:
+            cull += alt > self.dataset.ray_origin_height
+        self.xyz, self.voxels = self.xyz[~cull], self.voxels[~cull]
+        self.idx = torch.arange(self.xyz.shape[0], dtype=torch.int32)
+
+    def dump(
+        self,
+        output_filepath: Path,
+        sigma: torch.Tensor,
+    ) -> None:
+        """Dump this dataset to an OpenVDB file, unless it is not installed, in which
+        case, write the intermediate outputs to numpy files, which can be written to
+        OpenVDB elsewhere. The second option is useful if you are unable to install the
+        OpenVDB Python bindings in the same environment as your training.
+
+        Args:
+            output_filepath: Path to a .vdb file in which to dump the data.
+            sigma: The 3D field of the extinction coefficient.
+        """
+        if vdb is None:
+            voxel_filepath = Path("voxels.npy")
+            sigma_filepath = Path("sigma.npy")
+            warnings.warn(
+                "Unable to import OpenVDB Python bindings, exporting to "
+                f"{voxel_filepath} and {sigma_filepath} instead."
             )
-
-        # if in native mode, copy over the geolocation data
-        def _copy_nc_var(src, dst):
-            dst.setncatts({k: v for k, v in src.__dict__.items() if k != "_FillValue"})
-            dst[:] = src[:]
-
-        if self.mode == "native":
-            _copy_nc_var(self.l1c_nc_data["geolocation_data/latitude"], lat)
-            _copy_nc_var(self.l1c_nc_data["geolocation_data/longitude"], lon)
-            _copy_nc_var(self.l1c_nc_data["geolocation_data/height"], height)
-            _copy_nc_var(
-                self.l1c_nc_data["geolocation_data/solar_zenith_angle"], solar_zen
+            if voxel_filepath.exists():
+                raise FileExistsError
+            if sigma_filepath.exists():
+                raise FileExistsError
+            np.save(
+                voxel_filepath, self.voxels.detach().cpu().numpy(), allow_pickle=False
             )
-            _copy_nc_var(
-                self.l1c_nc_data["geolocation_data/solar_azimuth_angle"], solar_azi
-            )
-        # otherwise, use our own
-        else:
-            lat.long_name = "Latitude of bin locations"
-            lat.units = "degrees_north"
-            lat.valid_min = -90.0
-            lat.valid_max = 90.0
-            lat[:] = self.lat[..., 0].cpu().numpy()
-            lon.long_name = "Longitude of bin locations"
-            lon.units = "degrees_east"
-            lon.valid_min = -180.0
-            lon.valid_max = 180.0
-            lon[:] = self.lon[..., 0].cpu().numpy()
-            height.long_name = "Altitude at bin locations"
-            height.units = "meters"
-            height.valid_min = -1000
-            height.valid_max = 10000
-            height[:] = self.height.cpu().numpy()
+            np.save(sigma_filepath, sigma.detach().cpu().numpy(), allow_pickle=False)
+            return
+        assert output_filepath.suffix == ".vdb"
 
-        # altitude
-        nc_sample_alt = ncfile.createVariable(
-            "altitude", np.float32, ("bins_vertical",), fill_value=-32767
-        )
-        nc_sample_alt.units = "meters"
-        nc_sample_alt.long_name = "Altitude above surface"
-        nc_sample_alt[:] = self.sample_alt.cpu().numpy()
+        grid = vdb.FloatGrid()
+        for i in tqdm(range(sigma.shape[0])):
+            grid.copyFromArray(sigma[i, None, None, None], ijk=self.voxels[i])
 
-        # extinction coefficient
-        nc_sigma = ncfile.createVariable(
-            "extinction_coefficient",
-            np.float32,
-            (
-                "bins_along_track",
-                "bins_across_track",
-                "bins_vertical",
-                "number_of_bands",
-            ),
-            fill_value=-32767,
-        )
-        nc_sigma.units = "m^-1"
-        nc_sigma.long_name = "Extinction coefficient"
-        nc_sigma.valid_min = 0
-        nc_sigma[:] = sigma.cpu().numpy()
+        grid.transform = vdb.createLinearTransform(voxelSize=self.grid_res)
+        grid.name = "density"
+        grid.saveFloatAsHalf = True
+        grid.vectorType = "invariant"
 
-        # WGS-84 Cartesian XYZ
-        xyz_vg = (
-            self.xyz.view(list(self.shp[:2]) + [self.sample_alt.shape[0], 3])
-            .cpu()
-            .numpy()
-        )
-        nc_x = ncfile.createVariable(
-            "x_wgs84",
-            np.float32,
-            ("bins_along_track", "bins_across_track", "bins_vertical"),
-        )
-        nc_y = ncfile.createVariable(
-            "y_wgs84",
-            np.float32,
-            ("bins_along_track", "bins_across_track", "bins_vertical"),
-        )
-        nc_z = ncfile.createVariable(
-            "z_wgs84",
-            np.float32,
-            ("bins_along_track", "bins_across_track", "bins_vertical"),
-        )
-        nc_x.units = "meters"
-        nc_y.units = "meters"
-        nc_z.units = "meters"
-        nc_x.long_name = "X coordinate in WGS-84 cartesian (EPSG:4978)"
-        nc_y.long_name = "Y coordinate in WGS-84 cartesian (EPSG:4978)"
-        nc_z.long_name = "Z coordinate in WGS-84 cartesian (EPSG:4978)"
-        nc_x[:] = xyz_vg[..., 0]
-        nc_y[:] = xyz_vg[..., 1]
-        nc_z[:] = xyz_vg[..., 2]
-
-        ncfile.close()
+        vdb.write(str(output_filepath), grids=[grid])

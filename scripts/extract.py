@@ -1,4 +1,12 @@
-"""Extract a voxel grid from a trained neural rendering model."""
+"""Extract a voxel grid from a trained neural rendering model.
+
+Notices:
+The copyright notice below, to be included in the software, has also been provided in the license. 
+ 
+“Copyright © 2023 United States Government as represented by the Administrator of the National Aeronautics and Space Administration.  All Rights Reserved.”
+ 
+No other release is authorized at this time.
+"""
 
 import argparse
 import json

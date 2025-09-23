@@ -125,3 +125,10 @@ Work in progress, come back soon!
 ## Citation
 
 Work in progress, come back soon!
+
+# Notices
+The copyright notice below, to be included in the software, has also been provided in the license. 
+ 
+“Copyright © 2023 United States Government as represented by the Administrator of the National Aeronautics and Space Administration.  All Rights Reserved.”
+ 
+No other release is authorized at this time.

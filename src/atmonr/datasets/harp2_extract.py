@@ -88,7 +88,7 @@ class _HARP2LocalExtractDataset(HARP2ExtractDataset):
         super().__init__(dataset)
         self.alt_step = alt_step
         self.min_alt = 0 if min_alt is None else min_alt
-        self.max_alt = self.dataset.ray_origin_height if max_alt is None else max_alt
+        self.max_alt = self.dataset.config["ray_origin_height"] if max_alt is None else max_alt
         self.sample_alt = torch.arange(
             self.min_alt,
             self.max_alt + self.alt_step / 2,
@@ -214,7 +214,7 @@ class HARP2VoxelGridExtractDataset(_HARP2LocalExtractDataset):
         self.horizontal_step = horizontal_step
         self.alt_step = alt_step
         self.min_alt = 0 if min_alt is None else min_alt
-        self.max_alt = self.dataset.ray_origin_height if max_alt is None else max_alt
+        self.max_alt = self.dataset.config["ray_origin_height"] if max_alt is None else max_alt
 
         # get bounding lat/lon, making 2 assumptions:
         # 1) the lat/lon arrays are ordered so u is decreasing in latitude and v is increasing in longitude
@@ -649,7 +649,7 @@ class HARP2EarthCAREExtractDataset(HARP2ExtractDataset):
 
         # crop the altitude dimension to only locations beneath ray_origin_height
         mask_alt = (self.alt > 0).all(axis=0) * (
-            self.alt < self.dataset.ray_origin_height
+            self.alt < self.dataset.config["ray_origin_height"]
         ).all(axis=0)
         self.lat = self.lat[:, mask_alt]
         self.lon = self.lon[:, mask_alt]
@@ -701,7 +701,7 @@ class HARP2EarthCAREExtractDataset(HARP2ExtractDataset):
         if isinstance(self.earthcare_range, list):
             ncfile.earthcare_start_idx = self.earthcare_range[0]
             ncfile.earthcare_end_idx = self.earthcare_range[1]
-        ncfile.ray_origin_height = self.dataset.ray_origin_height
+        ncfile.ray_origin_height = self.dataset.config["ray_origin_height"]
 
         # geolocation variables
         lat = ncfile.createVariable(
@@ -890,9 +890,7 @@ class HARP2GlobalGridExtractDataset(HARP2ExtractDataset):
             self.xyz[..., 1],
             self.xyz[..., 2],
         )
-        cull = alt <= 0
-        if self.dataset.ray_origin_height is not None:
-            cull += alt > self.dataset.ray_origin_height
+        cull = alt <= 0 + alt > self.dataset.config["ray_origin_height"]
         del alt
         torch.cuda.empty_cache()
         self.xyz, self.voxels = self.xyz[~cull], self.voxels[~cull]

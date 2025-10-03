@@ -31,48 +31,171 @@ class HARP2Dataset(Dataset):
 
     def __init__(
         self,
+        config: dict,
         filename: str,
-        ray_origin_height: float = 20000.0,
-        subsurface_depth: float = 1000.0,
-        chunk_size: int = int(1e5),
+        chunk_size: int = int(1e4),
     ) -> None:
         """Initialize a HARP2Dataset.
 
         Args:
+            config: Config options for this dataset.
             filename: Filename corresponding to a HARP2 file.
-            ray_origin_height: Altitude in meters at which to construct ray origins,
-                i.e. the 'top' of a scene.
-            subsurface_depth: Depth in meters beneath the surface at which to construct
-                ray terminators, i.e. the 'bottom' of a scene.
             chunk_size: Number of pixels to process at once. Use this to cut down on GPU
                 memory overhead during startup.
         """
         super().__init__()
+        self.config = config
         self.filename = filename
-        self.ray_origin_height = ray_origin_height
-        self.subsurface_depth = subsurface_depth
         self.local_path = Path("data/HARP2") / filename
 
-        # if the file does not exist, go get it using earthaccess
+        if "max_abs_view_angle" not in self.config:
+            self.config["max_abs_view_angle"] = 90.0
+
+        # if the file does not exist, download it
         if not self.local_path.exists():
-            download_harp2_file(self.filename, self.local_path.parent, "L1B")
+            download(self.filename, self.local_path.parent, "L1B")
 
         # load the netCDF4 file
         self.nc_data = netCDF4.Dataset(self.local_path)
 
-        # used to reorder the channels, as HARP2 data is in GRNB order but we want BGRN
-        self.band_order = torch.cat(
-            [
-                torch.arange(80, 90),
-                torch.arange(10),
-                torch.arange(10, 70),
-                torch.arange(70, 80),
+        # get the index into the views to resort into IRGB order
+        self.view_idx, self.irgb_idx = get_indexes(
+            self.nc_data,
+            self.config["max_abs_view_angle"],
+            self.config["bands_to_keep"],
+        )
+
+        self._init_data()
+        self._init_rgb_idxs()
+        self._init_ray_data(chunk_size)
+
+    def _init_data(self) -> None:
+        """Parse the relevant data from the netCDF file."""
+        level = self.nc_data.processing_level
+        assert level in ["L1B", "L1C"]
+        if level == "L1B":
+            self.img_shp = self.nc_data["observation_data/i"].shape[1:]
+        else:
+            self.img_shp = self.nc_data["observation_data/i"].shape[:2]
+
+        def _parse_field(
+            field: netCDF4.Variable,
+        ) -> npt.NDArray[np.float32]:
+            """Read a field in HARP2 L1B/L1C data, making sure that:
+            1) invalid values are filled with nan
+            2) views are filtered and in IRGB order
+            3) North is at the top of the image
+            4) the angle dimension is last
+            5) the image dimensions are flattened
+            """
+            arr = field[:].filled(fill_value=np.nan)
+            assert len(arr.shape) >= 2 and len(arr.shape) <= 4
+            nv = self.view_idx.shape[0]  # number of views kept
+            if level == "L1B":
+                return arr[self.view_idx, ::-1].transpose((1, 2, 0)).reshape((-1, nv))
+            if len(arr.shape) == 4:
+                arr = arr[..., 0]
+            if len(arr.shape) == 3:
+                return arr[::-1, :, self.view_idx].reshape((-1, nv))
+            return np.tile(arr[::-1, :, None], (1, 1, self.view_idx.shape[0])).reshape(
+                (-1, nv)
+            )
+
+        lat = _parse_field(self.nc_data["geolocation_data/latitude"])
+        lon = _parse_field(self.nc_data["geolocation_data/longitude"])
+        if level == "L1B":
+            alt = _parse_field(self.nc_data["geolocation_data/surface_altitude"])
+        else:
+            alt = _parse_field(self.nc_data["geolocation_data/height"])
+        thetav = _parse_field(self.nc_data["geolocation_data/sensor_zenith_angle"])
+        phiv = _parse_field(self.nc_data["geolocation_data/sensor_azimuth_angle"])
+        i = _parse_field(self.nc_data["observation_data/i"])
+
+        # maximum intensity value required for visualization purposes later
+        self.max_i = np.nanmax(i).item()
+
+        # move everything to device
+        self.lat = torch.from_numpy(lat).cuda()
+        self.lon = torch.from_numpy(lon).cuda()
+        self.alt = torch.from_numpy(alt).cuda()
+        self.int_arr = torch.from_numpy(i).cuda()
+        self.thetav = torch.from_numpy(thetav).cuda()
+        self.phiv = torch.from_numpy(phiv).cuda()
+
+    def _init_rgb_idxs(self, mode: str = "nadir") -> None:
+        """Select the best angles to make an RGB image out of this granule.
+        
+        Args:
+            mode: TODO: describe and make configurable
+        """
+        angles = self.nc_data["sensor_views_bands/sensor_view_angle"][
+            self.view_idx
+        ].filled(fill_value=np.nan)
+        num_valid = (~(self.int_arr.isnan())).sum(dim=0).cpu().numpy()
+        striped = np.zeros_like(num_valid, dtype=bool)
+        if self.nc_data.processing_level == "L1B":
+            # simple way to check for striped views in L1B
+            striped = num_valid < num_valid.mean()
+        masks_rgb = [self.irgb_idx == i for i in range(1, 4)]
+        idxs_rgb = [np.where(mask)[0] for mask in masks_rgb]
+        angles_rgb = [angles[mask] for mask in masks_rgb]
+
+        # if red is missing, use closest-to-nadir non-striped
+        if not masks_rgb[0].any():
+            best_idx = np.argmin(np.abs(angles) + striped * 1000).item()
+            self.best_rgb_idx = [best_idx, best_idx, best_idx]
+            return
+        # if green and/or blue is missing but red is present, use grayscale red
+        if not masks_rgb[1].any() or not masks_rgb[2].any():
+            best_idx = idxs_rgb[0][np.argmin(np.abs(angles_rgb[0]) + striped[masks_rgb[0]] * 1000).item()].item()
+            self.best_rgb_idx = [best_idx, best_idx, best_idx]
+            return
+
+        # find the green/blue view angles which minimize the RGB aberration
+        angles_rgb_mg = np.stack(np.meshgrid(*angles_rgb, indexing="ij"))
+        angle_ranges = angles_rgb_mg.max(axis=0) - angles_rgb_mg.min(axis=0)
+        idx_nearest = angle_ranges.reshape((angles_rgb[0].shape[0], -1)).argmin(axis=1)
+        idx_nearest_green = idxs_rgb[1][idx_nearest // angles_rgb[2].shape[0]]
+        idx_nearest_blue = idxs_rgb[2][idx_nearest % angles_rgb[2].shape[0]]
+
+        if mode == "nadir":
+            # get the closest to nadir, while dodging striped angles
+            nadir_idx_red = np.argmin(np.abs(angles_rgb[0]) + striped[masks_rgb[0]] * 1000).item()
+            # the green and blue _shouldn't_ be striped, though this doesn't check
+            self.best_rgb_idx = [
+                idxs_rgb[0][nadir_idx_red].item(),
+                idx_nearest_green[nadir_idx_red].item(),
+                idx_nearest_blue[nadir_idx_red].item(),
             ]
-        ).cuda()
+        elif mode == "most_pixels":        
+            # maximize across indices the minimum number across RGB of valid pixels
+            maximizer = (
+                np.stack(
+                    [
+                        num_valid[masks_rgb[0]],
+                        num_valid[idx_nearest_green],
+                        num_valid[idx_nearest_blue],
+                    ]
+                )
+                .min(axis=0)
+                .argmax(axis=0)
+                .item()
+            )
+            self.best_rgb_idx = [
+                idxs_rgb[0][maximizer].item(),
+                idx_nearest_green[maximizer].item(),
+                idx_nearest_blue[maximizer].item(),
+            ]
+        else:
+            raise NotImplementedError(f"Unrecognized RGB indexing mode {mode}")
 
-        self._parse_ray_data()
-        self._select_best_slice()
-
+    def _init_ray_data(self, chunk_size: int) -> None:
+        """Initialize the ray data for this dataset. Chunking is used to lower the size
+        of the cache pytorch creates, easing the GPU memory load.
+        
+        Args:
+            chunk_size: Number of rays per chunk.
+        """
         # convert from image-like data to a flattened array of rays
         num_rays = self.lat.shape[0] * self.lat.shape[1]
         self.ray_origin = torch.zeros(
@@ -98,8 +221,7 @@ class HARP2Dataset(Dataset):
                 self.alt[slc_in],
                 self.thetav[slc_in],
                 self.phiv[slc_in],
-                ray_origin_height=self.ray_origin_height,
-                subsurface_depth=self.subsurface_depth,
+                ray_origin_height=self.config["ray_origin_height"],
             )
             num_chunk_rays = chunk_origin.shape[0]
             slc_out = slice(total_rays, total_rays + num_chunk_rays)
@@ -108,12 +230,6 @@ class HARP2Dataset(Dataset):
             self.ray_len[slc_out] = chunk_len
             total_rays += num_chunk_rays
         self.ray_rad = self.int_arr.flatten()
-
-        # get an integer index of bands
-        self.ray_band_idx = torch.zeros_like(self.int_arr, dtype=torch.int64)
-        self.ray_band_idx[:, 10:20] = 1
-        self.ray_band_idx[:, 20:80] = 2
-        self.ray_band_idx[:, 80:] = 3
 
         # filter any invalid rays, then normalize and convert the length scale
         self.ray_filter = filter_rays(self.ray_origin, self.ray_dir, self.ray_rad)
@@ -126,92 +242,11 @@ class HARP2Dataset(Dataset):
             self.ray_origin, self.ray_dir, self.ray_len
         )
         self.ray_len_norm = self.ray_len / self.scale
-        self.ray_band_idx = self.ray_band_idx.flatten()[self.ray_filter]
-
+        self.ray_irgb_idx = torch.from_numpy(self.irgb_idx).to(
+            device=self.ray_filter.device
+        )[torch.where(self.ray_filter.view((-1, self.view_idx.shape[0])))[1]]
         # get an integer index into the ray arrays
         self.ray_idx = torch.arange(self.ray_origin_norm.shape[0], dtype=torch.int32)
-
-    def _select_best_slice(self) -> None:
-        """Select the best angles to make an RGB image out of this granule."""
-        # get the per-band view angles
-        sensor_view_angle = torch.from_numpy(
-            self.nc_data["sensor_views_bands/sensor_view_angle"][:].data
-        ).cuda()
-        sensor_view_angle = sensor_view_angle[self.band_order]
-
-        # use the red angles as candidates for the visualization angle
-        angles_red = sensor_view_angle[20:80]
-        angles_green = sensor_view_angle[10:20]
-        angles_blue = sensor_view_angle[:10]
-
-        # get the nearest green and blue angles for each red angle
-        idx_green = (
-            torch.min((angles_red[:, None] - angles_green[None]) ** 2, dim=1)[1] + 10
-        )
-        idx_blue = torch.min((angles_red[:, None] - angles_blue[None]) ** 2, dim=1)[1]
-
-        # maximize the minimum number of valid pixels across RGB
-        num_valid = (~(self.int_arr.isnan())).sum(dim=0)
-        maximizer = (
-            torch.stack([num_valid[20:80], num_valid[idx_green], num_valid[idx_blue]])
-            .min(dim=0)[0]
-            .max(dim=0)[1]
-        )
-        self.best_rgb_idx = [
-            maximizer.item() + 20,
-            idx_green[maximizer].item(),
-            idx_blue[maximizer].item(),
-        ]
-
-    def _parse_ray_data(self) -> None:
-        """Parse the relevant data from the netCDF file."""
-        level = self.nc_data.processing_level
-        assert level in ["L1B", "L1C"]
-        if level == "L1B":
-            self.img_shp = self.nc_data["observation_data/i"].shape[1:]
-        else:
-            self.img_shp = self.nc_data["observation_data/i"].shape[:2]
-
-        def _parse_field(
-            field: netCDF4.Variable,
-        ) -> npt.NDArray[np.float32]:
-            """Read a field in HARP2 L1B/L1C data, making sure that:
-            1) invalid values are filled with nan
-            2) the angle dimension is last
-            3) North is at the top of the image
-            4) the image dimensions are flattened
-            """
-            arr = field[:].filled(fill_value=np.nan)
-            if level == "L1B":
-                return np.reshape(np.transpose(arr, (1, 2, 0))[::-1], (-1, 90))
-            if len(arr.shape) == 4:
-                return np.reshape(arr[::-1, ..., 0], (-1, 90))
-            if len(arr.shape) == 3:
-                return np.reshape(arr[::-1], (-1, 90))
-            return np.reshape(np.tile(arr[..., None], (1, 1, 90))[::-1], (-1, 90))
-
-        lat = _parse_field(self.nc_data["geolocation_data/latitude"])
-        lon = _parse_field(self.nc_data["geolocation_data/longitude"])
-        if level == "L1B":
-            alt = _parse_field(self.nc_data["geolocation_data/surface_altitude"])
-        else:
-            alt = _parse_field(self.nc_data["geolocation_data/height"])
-        i = _parse_field(self.nc_data["observation_data/i"])
-        # NOTE: don't scale viewing geometry, the scale_factor and add_offset are wrong
-        thetav = _parse_field(self.nc_data["geolocation_data/sensor_zenith_angle"])
-        phiv = _parse_field(self.nc_data["geolocation_data/sensor_azimuth_angle"])
-
-        # max normalization for intensity
-        self.max_i = np.nanmax(i)
-        i /= self.max_i
-
-        # reorder the channels, as HARP2 data is in GRNB order but we want BGRN
-        self.lat = torch.from_numpy(lat).cuda()[..., self.band_order]
-        self.lon = torch.from_numpy(lon).cuda()[..., self.band_order]
-        self.alt = torch.from_numpy(alt).cuda()[..., self.band_order]
-        self.int_arr = torch.from_numpy(i).cuda()[..., self.band_order]
-        self.thetav = torch.from_numpy(thetav).cuda()[..., self.band_order]
-        self.phiv = torch.from_numpy(phiv).cuda()[..., self.band_order]
 
     def get_progress_tracker(self) -> ProgressTracker:
         """Get a ProgressTracker for this HARP2Dataset.
@@ -220,25 +255,33 @@ class HARP2Dataset(Dataset):
             progress: A ProgressTracker for this HARP2Dataset.
         """
         # get target image by setting valid locations to valid radiances
-        target_img = torch.zeros((self.img_shp[0] * self.img_shp[1] * 90)).to(
-            self.ray_filter.device
-        )
+        target_img = torch.zeros(
+            (self.img_shp[0] * self.img_shp[1] * self.view_idx.shape[0])
+        ).to(self.ray_filter.device)
         target_img[self.ray_filter] = self.ray_rad
-        target_img = target_img.view(list(self.img_shp) + [90])
-
-        # use the best band/angle indices to minimize striping and cropping
-        target_img_rgb = target_img[..., self.best_rgb_idx]
+        target_img = target_img.view(list(self.img_shp) + [self.view_idx.shape[0]])
+        target_img_rgb = self.get_rgb(target_img.permute((2, 0, 1)))
 
         # set initial predicted image and pixel arrays to zero
         pred_img = torch.zeros_like(target_img)
         pred_pixels = torch.zeros(self.ray_rad.shape)
+        pred_img_surf = torch.zeros_like(target_img)
+        pred_pixels_surf = torch.zeros(self.ray_rad.shape)
+        pred_img_atmo = torch.zeros_like(target_img)
+        pred_pixels_atmo = torch.zeros(self.ray_rad.shape)
 
         progress = ProgressTracker(
-            self.ray_filter.view(self.img_shp[0], self.img_shp[1], 90).cpu().numpy(),
+            self.ray_filter.view(
+                self.img_shp[0], self.img_shp[1], self.view_idx.shape[0]
+            ).cpu().numpy(),
             target_img.cpu().numpy(),
             target_img_rgb.cpu().numpy(),
             pred_img.cpu().numpy(),
             pred_pixels.cpu().numpy(),
+            pred_img_surf.cpu().numpy(),
+            pred_pixels_surf.cpu().numpy(),
+            pred_img_atmo.cpu().numpy(),
+            pred_pixels_atmo.cpu().numpy(),
         )
         return progress
 
@@ -254,31 +297,36 @@ class HARP2Dataset(Dataset):
         Returns:
             metrics: A dictionary of metric names and their values.
         """
+        pred_img, target_img = pred_img / self.max_i, target_img / self.max_i
+
         # clip image before image metrics since intensities are max-normalized
         pred_img = torch.clip(pred_img, min=0, max=1)
 
         data_range = (target_img.max() - target_img.min()).item()
-        psnr = torch.zeros(90, device=self.band_order.device)
-        ssim = torch.zeros(90, device=self.band_order.device)
-        psnr[self.band_order] = peak_signal_noise_ratio(
+        psnr = (
+            torch.zeros(self.view_idx.shape[0], device=self.int_arr.device) + torch.nan
+        )
+        ssim = (
+            torch.zeros(self.view_idx.shape[0], device=self.int_arr.device) + torch.nan
+        )
+        psnr = peak_signal_noise_ratio(
             pred_img, target_img, dim=(1, 2), reduction="none", data_range=data_range
         )
-        _ssim = structural_similarity_index_measure(
+        ssim = structural_similarity_index_measure(
             pred_img[:, None], target_img[:, None], reduction="none"
         )
-        assert isinstance(_ssim, torch.Tensor)
-        ssim[self.band_order] = _ssim
+        assert isinstance(ssim, torch.Tensor)
 
         metrics = {
             "PSNR": psnr.cpu().numpy().tolist(),
             "SSIM": ssim.cpu().numpy().tolist(),
-            "PSNR_mean": psnr.mean().item(),
-            "SSIM_mean": ssim.mean().item(),
+            "PSNR_mean": psnr[~torch.isnan(psnr)].mean().item(),
+            "SSIM_mean": ssim[~torch.isnan(ssim)].mean().item(),
         }
         return metrics
 
     def get_rgb(self, cube: torch.Tensor) -> torch.Tensor:
-        """Get an RGB image from a HARP2 image cube, using the closest to nadir angles.
+        """Get an RGB image from a HARP2 image cube, using the best RGB index.
 
         Args:
             cube: A HARP2 image cube.
@@ -286,8 +334,8 @@ class HARP2Dataset(Dataset):
         Returns:
             img: An RGB image of the HARP2 scene.
         """
-        assert cube.shape == (90, self.img_shp[0], self.img_shp[1])
-        img = torch.clamp(cube[self.best_rgb_idx], 0, 1)
+        assert cube.shape == (self.view_idx.shape[0], self.img_shp[0], self.img_shp[1])
+        img = torch.clamp(cube[self.best_rgb_idx] / self.max_i, 0, 1)
         return img.permute(1, 2, 0).contiguous()
 
     def get_point_preprocessor(self, point_preprocessor: str) -> Callable:
@@ -303,7 +351,6 @@ class HARP2Dataset(Dataset):
             lat_min, lat_max = non_nan_lat.min(), non_nan_lat.max()
             lon_min, lon_max = non_nan_lon.min(), non_nan_lon.max()
             lat_range, lon_range = lat_max - lat_min, lon_max - lon_min
-            alt_range = self.ray_origin_height + self.subsurface_depth
 
             # if this granule crosses the dateline, shift lon by 180
             shift_lon = lon_max > 179 and lon_min < -179
@@ -314,20 +361,19 @@ class HARP2Dataset(Dataset):
 
             def preprocess_coords(
                 coords_xyz: torch.Tensor,
-            ) -> tuple[torch.Tensor, torch.Tensor]:
+            ) -> torch.Tensor:
                 dtype = coords_xyz.dtype
                 coords_xyz = coords_xyz * self.scale + self.offset
                 x, y, z = coords_xyz[..., 0], coords_xyz[..., 1], coords_xyz[..., 2]
                 lat, lon, alt = cartesian_to_horizontal(x, y, z)
-                subsurface_mask = alt < 0
                 if shift_lon:
                     lon = lon % 360 - 180
                 lat = 2 * (lat - lat_min) / lat_range - 1
                 lon = 2 * (lon - lon_min) / lon_range - 1
-                alt = 2 * (alt + self.subsurface_depth) / alt_range - 1
+                alt = 2 * alt / self.config["ray_origin_height"] - 1
                 coords = torch.stack([lat, lon, alt], dim=-1).to(dtype=dtype)
                 coords = torch.clip(coords, min=-1, max=1)
-                return coords, subsurface_mask
+                return coords
 
             return preprocess_coords
         else:
@@ -356,7 +402,7 @@ class HARP2Dataset(Dataset):
             "rad": self.ray_rad[idx],
             "len": self.ray_len_norm[idx],
             "idx": self.ray_idx[idx],
-            "band_idx": self.ray_band_idx[idx],
+            "irgb_idx": self.ray_irgb_idx[idx],
         }
         return item
 
@@ -373,7 +419,7 @@ class HARP2Dataset(Dataset):
         return len
 
 
-def download_harp2_file(filename: str, dst_dir: str | Path, level: str) -> None:
+def download(filename: str, dst_dir: str | Path, level: str) -> None:
     """Use earthaccess to download a HARP2 granule if it is not already present.
 
     Args:
@@ -400,3 +446,46 @@ def download_harp2_file(filename: str, dst_dir: str | Path, level: str) -> None:
         r for r in results if short_filename in r.render_dict["meta"]["native-id"]
     ]
     earthaccess.download(results[0], str(dst_dir))
+
+
+def get_indexes(
+    nc_data: netCDF4.Dataset,
+    max_abs_view_angle: float,
+    bands_to_keep: list = [0, 1, 2, 3],
+) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
+    """Get an index of which view angles are within a maximum absolute value threshold,
+    as well as the index from each view into the band index.
+    
+    Args:
+        nc_data: The netCDF data of a HARP2 L1B or L1C file.
+        max_abs_view_angle: The maximum absolute viewing angle to allow.
+        bands_to_keep: The list of bands to keep, with 0: infrared, 1: red, 2: green,
+            3: blue. Defaults to [0, 1, 2, 3].
+
+    Returns:
+        view_idx: Index of views meeting the threshold in the original netCDF order.
+        irgb_idx: Index of the band for each view, with 0: infrared, 1: red, 2: green,
+            3: blue.
+    """
+    if nc_data.processing_level not in ["L1B", "L1C"]:
+        raise NotImplementedError(
+            "Not implemented for level {nc_data.processing_level} data!"
+        )
+    # get a mask of which views to use
+    angles = nc_data["sensor_views_bands/sensor_view_angle"][:].filled(
+        fill_value=np.nan
+    )
+    angles_filtered = np.where(np.abs(angles) <= max_abs_view_angle)[0]
+    # get the index from all 90 into the IRGB-sorted arrays
+    wavelengths = nc_data["sensor_views_bands/intensity_wavelength"][:].data.flatten()
+    view_order = np.argsort(-wavelengths, stable=True)  # sort by decreasing wavelength
+    view_idx = view_order[np.isin(view_order, angles_filtered)]
+    irgb_idx = np.where(
+        wavelengths[view_idx, None] == np.unique(wavelengths)[None, ::-1]
+    )[1]
+
+    mask_bands_to_keep = np.isin(irgb_idx, bands_to_keep)
+
+    view_idx = view_idx[mask_bands_to_keep]
+    irgb_idx = irgb_idx[mask_bands_to_keep]
+    return view_idx, irgb_idx

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import h5py
 import netCDF4
 import numpy as np
 
@@ -15,7 +16,7 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 import warnings
 
-from atmonr.datasets.harp2 import HARP2Dataset, download_harp2_file
+from atmonr.datasets.harp2 import HARP2Dataset, download
 from atmonr.geospatial.spherical import (
     wgs_84_to_spherical,
     spherical_to_wgs84,
@@ -30,7 +31,7 @@ from atmonr.geospatial.wgs_84 import (
 from atmonr.graphics_utils import voxel_traversal
 
 
-_CHUNK_SIZE = int(5e4)
+_CHUNK_SIZE = int(3e4)
 DEM_PATH = "data/ETOPO1_ocssw.nc"
 
 
@@ -86,7 +87,7 @@ class _HARP2LocalExtractDataset(HARP2ExtractDataset):
             raise NotImplementedError
         super().__init__(dataset)
         self.alt_step = alt_step
-        self.min_alt = -self.dataset.subsurface_depth if min_alt is None else min_alt
+        self.min_alt = 0 if min_alt is None else min_alt
         self.max_alt = self.dataset.ray_origin_height if max_alt is None else max_alt
         self.sample_alt = torch.arange(
             self.min_alt,
@@ -130,6 +131,7 @@ class HARP2L1CExtractDataset(_HARP2LocalExtractDataset):
         """Initialize a HARP2L1CExtractDataset.
 
         Args:
+            dataset: The corresponding HARP2Dataset for this extract.
             alt_step: Vertical spacing between voxels, in meters.
             min_alt: Minimum altitude above sea-level of the voxel grid, in meters.
             max_alt: Maximum altitude above sea-level of the voxel grid, in meters.
@@ -141,7 +143,7 @@ class HARP2L1CExtractDataset(_HARP2LocalExtractDataset):
         l1c_filename = f"{sensor}.{timestamp}.L1C.{version}.5km.nc"
         l1c_path = Path("data/HARP2_L1C") / l1c_filename
         if not l1c_path.exists():
-            download_harp2_file(l1c_filename, l1c_path.parent, "L1C")
+            download(l1c_filename, l1c_path.parent, "L1C")
 
         # load the netCDF4 file
         self.l1c_nc_data = netCDF4.Dataset(l1c_path)
@@ -201,6 +203,7 @@ class HARP2VoxelGridExtractDataset(_HARP2LocalExtractDataset):
         """Initialize a HARP2VoxelGridExtractDataset.
 
         Args:
+            dataset: The corresponding HARP2Dataset for this extract.
             horizontal_step: Horizontal spacing between voxels, in meters.
             alt_step: Vertical spacing between voxels, in meters.
             min_alt: Minimum altitude above sea-level of the voxel grid, in meters.
@@ -210,14 +213,18 @@ class HARP2VoxelGridExtractDataset(_HARP2LocalExtractDataset):
 
         self.horizontal_step = horizontal_step
         self.alt_step = alt_step
-        self.min_alt = -self.dataset.subsurface_depth if min_alt is None else min_alt
+        self.min_alt = 0 if min_alt is None else min_alt
         self.max_alt = self.dataset.ray_origin_height if max_alt is None else max_alt
 
         # get bounding lat/lon, making 2 assumptions:
         # 1) the lat/lon arrays are ordered so u is decreasing in latitude and v is increasing in longitude
         # 2) the corners of the lat/lon arrays have at least one valid value
-        lat_img = self.dataset.lat.view(list(self.dataset.img_shp) + [90])
-        lon_img = self.dataset.lon.view(list(self.dataset.img_shp) + [90])
+        lat_img = self.dataset.lat.view(
+            list(self.dataset.img_shp) + [self.dataset.view_idx.shape[0]]
+        )
+        lon_img = self.dataset.lon.view(
+            list(self.dataset.img_shp) + [self.dataset.view_idx.shape[0]]
+        )
 
         # check assumption 1
         assert torch.nanmean(lat_img[-1, 0] - lat_img[0, 0]) < 0
@@ -455,7 +462,7 @@ def _extract_to_netCDF(
     ncfile.neural_rendering_scene_offset_y = extract_dataset.dataset.offset[1].item()
     ncfile.neural_rendering_scene_offset_z = extract_dataset.dataset.offset[2].item()
 
-    # Some geolocation attributes
+    # Some geolocation variables
     lat = ncfile.createVariable(
         "latitude",
         np.float32,
@@ -585,6 +592,199 @@ def _extract_to_netCDF(
     ncfile.close()
 
 
+class HARP2EarthCAREExtractDataset(HARP2ExtractDataset):
+    """Implementation of HARP2ExtractDataset for comparisons with EarthCARE data."""
+
+    def __init__(
+        self,
+        dataset: HARP2Dataset,
+        earthcare_filename: str,
+        earthcare_range: list[int] | None,
+        *args,
+        **kwargs,
+    ) -> None:
+        """Initialize a HARP2EarthCAREExtractDataset.
+
+        Args:
+            dataset: The corresponding HARP2Dataset for this extract.
+            earthcare_filename: Name of the EarthCARE file to use for matchups.
+            earthcare_range: Starting and ending indices at which the EarthCARE data intersects the HARP2 granule.
+        """
+        super().__init__(dataset)
+        assert earthcare_range is None or (
+            len(earthcare_range) == 2 and earthcare_range[1] > earthcare_range[0]
+        )
+        self.earthcare_filename = earthcare_filename
+        self.earthcare_range = earthcare_range
+
+        self.ec_h5 = h5py.File(Path("data") / "EarthCARE" / self.earthcare_filename)
+        file_type = self.ec_h5["HeaderData/FixedProductHeader/File_Type"][()].decode()  # type: ignore
+        if file_type != "ATL_EBD_2A":
+            raise NotImplementedError("Extraction currently only supports ATL_EBD_2A,"
+                                      f" not supported for '{file_type}'.")
+
+        # needed to get h5py to play nicely with pylance
+        def _read_h5(k: str) -> h5py.Dataset:
+            ds = self.ec_h5[k]
+            assert isinstance(ds, h5py.Dataset)
+            return ds
+
+        self.alt = _read_h5("ScienceData/height")[:]
+        self.lat = np.repeat(
+            _read_h5("ScienceData/latitude")[:][:, None],
+            self.alt.shape[1],
+            axis=1,
+        )
+        self.lon = np.repeat(
+            _read_h5("ScienceData/longitude")[:][:, None],
+            self.alt.shape[1],
+            axis=1,
+        )
+        # keep only a range, if specified
+        if self.earthcare_range is not None:
+            slc = slice(*self.earthcare_range)
+            self.lat = self.lat[slc]
+            self.lon = self.lon[slc]
+            self.alt = self.alt[slc]
+
+        # crop the altitude dimension to only locations beneath ray_origin_height
+        mask_alt = (self.alt > 0).all(axis=0) * (
+            self.alt < self.dataset.ray_origin_height
+        ).all(axis=0)
+        self.lat = self.lat[:, mask_alt]
+        self.lon = self.lon[:, mask_alt]
+        self.alt = self.alt[:, mask_alt]
+
+        self.shp = self.lat.shape
+
+        self.xyz = torch.stack(
+            horizontal_to_cartesian(
+                torch.from_numpy(self.lat.flatten()).to(self.device),
+                torch.from_numpy(self.lon.flatten()).to(self.device),
+                torch.from_numpy(self.alt.flatten()).to(self.device),
+            ),
+            dim=1,
+        )
+        self.idx = torch.arange(self.xyz.shape[0], dtype=torch.int32)
+
+    def dump(
+        self,
+        output_filepath: Path,
+        sigma: torch.Tensor,
+    ) -> None:
+        """Dump this dataset to a netCDF4 file.
+
+        Args:
+            output_filepath: Path to a .nc file in which to dump the data.
+            sigma: The 3D field of the extinction coefficient.
+        """
+        assert output_filepath.suffix == ".nc"
+
+        num_bands = sigma.shape[-1]
+        sigma = sigma.view(list(self.shp) + [num_bands])
+
+        ncfile = netCDF4.Dataset(output_filepath, mode="w")
+
+        # dimensions
+        ncfile.createDimension("along_track", self.shp[0])
+        ncfile.createDimension("JSG_height", self.shp[1])
+        ncfile.createDimension("number_of_bands", num_bands)
+
+        # attributes
+        ncfile.title = "PACE HARP2 Neural Rendering Volumetric Data in EarthCARE ATLID "
+        "level 2A coordinates."
+        ncfile.input_l1b_product_name = self.dataset.nc_data.product_name
+        ncfile.neural_rendering_scene_scale = self.dataset.scale
+        ncfile.neural_rendering_scene_offset_x = self.dataset.offset[0].item()
+        ncfile.neural_rendering_scene_offset_y = self.dataset.offset[1].item()
+        ncfile.neural_rendering_scene_offset_z = self.dataset.offset[2].item()
+        if isinstance(self.earthcare_range, list):
+            ncfile.earthcare_start_idx = self.earthcare_range[0]
+            ncfile.earthcare_end_idx = self.earthcare_range[1]
+        ncfile.ray_origin_height = self.dataset.ray_origin_height
+
+        # geolocation variables
+        lat = ncfile.createVariable(
+            "latitude",
+            np.float64,
+            ("along_track"),
+            fill_value=self.ec_h5["ScienceData/latitude"]
+            .attrs["_FillValue"][:]  # type: ignore
+            .item(),
+        )
+        lon = ncfile.createVariable(
+            "longitude",
+            np.float64,
+            ("along_track"),
+            fill_value=self.ec_h5["ScienceData/longitude"]
+            .attrs["_FillValue"][:]  # type: ignore
+            .item(),
+        )
+        height = ncfile.createVariable(
+            "height",
+            np.float64,
+            ("along_track", "JSG_height"),
+            fill_value=self.ec_h5["ScienceData/height"]
+            .attrs["_FillValue"][:]  # type: ignore
+            .item(),
+        )
+
+        def _copy_attrs(h5_var, nc_var):
+            for attr_name in ["units", "long_name", "comment"]:
+                setattr(nc_var, attr_name, h5_var.attrs[attr_name].decode())
+
+        _copy_attrs(self.ec_h5["ScienceData/latitude"], lat)
+        _copy_attrs(self.ec_h5["ScienceData/longitude"], lon)
+        _copy_attrs(self.ec_h5["ScienceData/height"], height)
+        lat[:] = self.lat[..., 0]
+        lon[:] = self.lat[..., 0]
+        height[:] = self.alt
+
+        # extinction coefficient
+        nc_sigma = ncfile.createVariable(
+            "extinction_coefficient",
+            np.float32,
+            (
+                "along_track",
+                "JSG_height",
+                "number_of_bands",
+            ),
+            fill_value=-32767,
+        )
+        nc_sigma.units = "m^-1"
+        nc_sigma.long_name = "Extinction coefficient"
+        nc_sigma.valid_min = 0
+        nc_sigma[:] = sigma.cpu().numpy()
+
+        # WGS-84 Cartesian XYZ
+        xyz = self.xyz.view(list(self.shp) + [3]).cpu().numpy()
+        nc_x = ncfile.createVariable(
+            "x_wgs84",
+            np.float32,
+            ("along_track", "JSG_height"),
+        )
+        nc_y = ncfile.createVariable(
+            "y_wgs84",
+            np.float32,
+            ("along_track", "JSG_height"),
+        )
+        nc_z = ncfile.createVariable(
+            "z_wgs84",
+            np.float32,
+            ("along_track", "JSG_height"),
+        )
+        nc_x.units = "meters"
+        nc_y.units = "meters"
+        nc_z.units = "meters"
+        nc_x.long_name = "X coordinate in WGS-84 cartesian (EPSG:4978)"
+        nc_y.long_name = "Y coordinate in WGS-84 cartesian (EPSG:4978)"
+        nc_z.long_name = "Z coordinate in WGS-84 cartesian (EPSG:4978)"
+        nc_x[:] = xyz[..., 0]
+        nc_y[:] = xyz[..., 1]
+        nc_z[:] = xyz[..., 2]
+        ncfile.close()
+
+
 class HARP2GlobalGridExtractDataset(HARP2ExtractDataset):
     """Implementation of HARP2ExtractDataset for a global voxel grid, for large-scale
     visualization purposes. This dataset uses a spherical Earth reference frame and a
@@ -599,6 +799,7 @@ class HARP2GlobalGridExtractDataset(HARP2ExtractDataset):
         scale: float,
         grid_res: float,
         vstretch: float | None = None,
+        lon_crop: float = 0.05,
         *args,
         **kwargs,
     ) -> None:
@@ -636,7 +837,7 @@ class HARP2GlobalGridExtractDataset(HARP2ExtractDataset):
         ray_dest *= self.scale / self.grid_res
 
         # voxel traversal in chunks to avoid running out of GPU memory
-        self.voxels = torch.zeros((0, 3)).to(device=self.device)
+        self.xyz = torch.zeros((0, 3)).to(device=self.device)
         for i in tqdm(
             range(ray_origin.shape[0] // _CHUNK_SIZE + 1),
             desc="Traversing voxels",
@@ -645,9 +846,9 @@ class HARP2GlobalGridExtractDataset(HARP2ExtractDataset):
             end = min(ray_origin.shape[0], start + _CHUNK_SIZE)
             if start == end:
                 continue
-            self.voxels = torch.cat(
+            self.xyz = torch.cat(
                 [
-                    self.voxels,
+                    self.xyz,
                     voxel_traversal(
                         ray_origin[start:end],
                         ray_dest[start:end],
@@ -657,11 +858,28 @@ class HARP2GlobalGridExtractDataset(HARP2ExtractDataset):
                 dim=0,
             )
             # have to do this every chunk, or will run out of GPU memory
-            self.voxels = torch.unique(self.voxels, dim=0, sorted=False)
+            self.xyz = torch.unique(self.xyz, dim=0, sorted=False)
         del (ray_origin, ray_dest)
+        torch.cuda.empty_cache()
 
-        # voxel centers in meters
-        self.xyz = (self.voxels.float() + 0.5) * (self.grid_res / scale)
+        # convert voxel index to voxel centers in meters
+        self.xyz = (self.xyz.float() + 0.5) * (self.grid_res / self.scale)
+        # crop most extreme longitudes in each z-layer
+        z_uq = torch.unique(self.xyz[..., 2])
+        lon_spherical = torch.atan2(self.xyz[..., 1], self.xyz[..., 0])  # radians
+        xyz_crop = torch.zeros((0, 3), device=self.device)
+        for z in tqdm(z_uq, desc="Cropping layers"):
+            layer_mask = self.xyz[..., 2] == z
+            lon_layer = lon_spherical[layer_mask]
+            lon_layer_range = lon_layer.max() - lon_layer.min()
+            layer_min_lon = lon_layer.min() + lon_crop * lon_layer_range
+            layer_max_lon = lon_layer.max() - lon_crop * lon_layer_range
+            crop_mask = (lon_layer > layer_min_lon) * (lon_layer < layer_max_lon)
+            xyz_crop = torch.cat([xyz_crop, self.xyz[layer_mask][crop_mask]], dim=0)
+        self.xyz = xyz_crop
+        self.voxels = (self.xyz * (self.scale / self.grid_res)).to(dtype=torch.int32)
+        del (z_uq, lon_spherical, xyz_crop)
+        torch.cuda.empty_cache()
         # un-stretch using the reciprocal
         self.xyz = stretch_above_sea_level(self.xyz, 1 / self.vstretch)
         # convert back to WGS-84
@@ -675,6 +893,8 @@ class HARP2GlobalGridExtractDataset(HARP2ExtractDataset):
         cull = alt <= 0
         if self.dataset.ray_origin_height is not None:
             cull += alt > self.dataset.ray_origin_height
+        del alt
+        torch.cuda.empty_cache()
         self.xyz, self.voxels = self.xyz[~cull], self.voxels[~cull]
         self.idx = torch.arange(self.xyz.shape[0], dtype=torch.int32)
 

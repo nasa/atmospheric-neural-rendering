@@ -1,12 +1,16 @@
 {
-    "data_type": "HARP2",
+    "dataset": {
+        "type": "HARP2",
+        "max_abs_view_angle": 45.0,
+        "ray_origin_height": 20000,
+        "bands_to_keep": [0, 1, 2, 3]
+    },
     "pipeline": {
         "type": "NeRF",
         "include_height": false,
         "point_preprocessor": "horizontal",
         "num_bands": 4,
         "ray_origin_height": 20000,
-        "subsurface_depth": 1000,
         "sampler": {
             "N_c": 64,
             "N_f": 128

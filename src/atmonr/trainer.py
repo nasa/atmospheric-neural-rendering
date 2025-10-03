@@ -49,7 +49,7 @@ class Trainer:
 
         self.epoch_idx = 0
         self.iter_count = 0
-        self.num_epochs = -(self.config["num_iters"] // -len(self.dataloader))
+        self.num_epochs = int(-(self.config["num_iters"] // -len(self.dataloader)))
         self.optimizer = pipeline.get_optimizer(self.config["optimizer"])
 
         if self.config["scheduler"]["type"] == "target_lr":
@@ -103,7 +103,6 @@ class Trainer:
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
-                self.pipeline.update_parameters()
 
                 # update tensorboard with the loss function
                 self.writer.add_scalar("Loss", loss.item(), self.iter_count)
@@ -122,10 +121,22 @@ class Trainer:
 
                 # update the progress tracker
                 pred_pixels = torch.take_along_dim(
-                    results["color_map_fine"], batch["band_idx"][:, None], 1
+                    results["color_map_fine"], batch["irgb_idx"][:, None], dim=1
                 )[:, 0]
                 progress.pred_pixels[batch["idx"].cpu().numpy()] = (
                     pred_pixels.detach().cpu().float().numpy()
+                )
+                pred_pixels_surf = torch.take_along_dim(
+                    results["color_map_surf"], batch["irgb_idx"][:, None], dim=1
+                )[:, 0]
+                progress.pred_pixels_surf[batch["idx"].cpu().numpy()] = (
+                    pred_pixels_surf.detach().cpu().float().numpy()
+                )
+                pred_pixels_atmo = torch.take_along_dim(
+                    results["color_map_atmo"], batch["irgb_idx"][:, None], dim=1
+                )[:, 0]
+                progress.pred_pixels_atmo[batch["idx"].cpu().numpy()] = (
+                    pred_pixels_atmo.detach().cpu().float().numpy()
                 )
 
                 # quit if enough iters
@@ -153,6 +164,16 @@ class Trainer:
             target_img[target_img.isnan()] = 0
             pred_img = pred_img.permute(2, 0, 1)
             target_img = target_img.permute(2, 0, 1)
+            progress.pred_img_surf[progress.valid] = progress.pred_pixels_surf
+            pred_img_surf = torch.from_numpy(progress.pred_img_surf).to(
+                self.pipeline.device
+            )
+            pred_img_surf = pred_img_surf.permute(2, 0, 1)
+            progress.pred_img_atmo[progress.valid] = progress.pred_pixels_atmo
+            pred_img_atmo = torch.from_numpy(progress.pred_img_atmo).to(
+                self.pipeline.device
+            )
+            pred_img_atmo = pred_img_atmo.permute(2, 0, 1)
 
             self.epoch_idx += 1
 
@@ -174,7 +195,17 @@ class Trainer:
 
             # update tensorboard with side-by-side image comparison
             pred_img_rgb = self.dataset.get_rgb(pred_img).cpu().numpy()
-            viz = np.concatenate([pred_img_rgb, progress.target_img_rgb], axis=1)
+            pred_img_surf_rgb = self.dataset.get_rgb(pred_img_surf).cpu().numpy()
+            pred_img_atmo_rgb = self.dataset.get_rgb(pred_img_atmo).cpu().numpy()
+            viz = np.concatenate(
+                [
+                    pred_img_surf_rgb,
+                    pred_img_atmo_rgb,
+                    pred_img_rgb,
+                    progress.target_img_rgb,
+                ],
+                axis=1,
+            )
             self.writer.add_image(
                 f"Epoch {self.epoch_idx}", np.transpose(viz, (2, 0, 1))
             )
@@ -185,6 +216,7 @@ class Trainer:
             # stop profiler after the first epoch
             if prof:
                 prof.stop()
+        print()
 
     def get_profiler(self) -> torch.profiler.profile:
         """Get a profiler for this trainer."""

@@ -41,10 +41,11 @@ def parse_args() -> argparse.Namespace:
         "--coord-mode",
         type=str,
         required=True,
-        help="Either 'l1c', 'voxelgrid', or 'globalgrid'. The coordinates of the "
-        "extracted volume can either match the native resolution / locations of the "
-        "training data, use a user-supplied voxel grid, defined by --horizontal-step, "
-        "or use a voxel grid in spherical Earth coordinate frame.",
+        help="Either 'l1c', 'voxelgrid', 'globalgrid', or 'earthcare'. The coordinates "
+        "of the extracted volume can either match the native resolution / locations of "
+        "the training data, use a user-supplied voxel grid, defined by "
+        "--horizontal-step, use a voxel grid in spherical Earth coordinate frame, or "
+        "match the coordinates of a validation product from EarthCARE.",
     )
     parser.add_argument(
         "--extract-filename",
@@ -63,7 +64,7 @@ def parse_args() -> argparse.Namespace:
         "--min-alt",
         type=float,
         help="Minimum above-surface altitude (meters) of the voxel grid. Used in "
-        "l1c and voxelgrid modes. Default: -1 * subsurface_depth",
+        "l1c and voxelgrid modes. Default: 0",
     )
     parser.add_argument(
         "--max-alt",
@@ -105,9 +106,32 @@ def parse_args() -> argparse.Namespace:
         help="How much to scale up the above-surface points to visually exaggerate the "
         "atmosphere on a global scale. Used in globalgrid mode. Default: 12",
     )
+    parser.add_argument(
+        "--lon-crop",
+        type=float,
+        default=0.05,
+        help="How much of the east/west edges to crop in the output voxel grid. Used "
+        "in globalgrid mode. Default: 0.05",
+    )
+    parser.add_argument(
+        "--earthcare-filename",
+        type=str,
+        help="Filename of the EarthCARE data to use for the extraction coordinates. "
+        "Used in earthcare mode.",
+    )
+
+    def _comma_separated(string: str) -> list[int]:
+        return [int(val) for val in string.split(",")]
+
+    parser.add_argument(
+        "--earthcare-range",
+        type=_comma_separated,
+        help="Starting and ending index in the EarthCARE data at which it intersects "
+        "the HARP2 granule, provided as a comma-delineated string of ints. Used in "
+        "earthcare mode.",
+    )
     args = parser.parse_args()
     args.coord_mode = args.coord_mode.lower()
-    assert args.coord_mode in ["l1c", "voxelgrid", "spherical", "globalgrid"]
     assert args.alt_step > 0 and args.horizontal_step > 0
     assert args.scale > 0
     assert args.grid_res > 0
@@ -136,16 +160,14 @@ def main() -> None:
     device = current_device()  # only support single-gpu training for now
 
     if not args.min_alt:
-        args.min_alt = -config["pipeline"]["subsurface_depth"]
+        args.min_alt = 0
     if not args.max_alt:
         args.max_alt = config["pipeline"]["ray_origin_height"]
 
     # get the dataset
     dataset = get_dataset(
-        config["data_type"],
+        config["dataset"],
         train_args.scene_filename,
-        ray_origin_height=config["pipeline"]["ray_origin_height"],
-        subsurface_depth=config["pipeline"]["subsurface_depth"],
     )
 
     # get the sample altitudes
@@ -155,7 +177,6 @@ def main() -> None:
 
     extract_dataset = get_extract_dataset(
         args.coord_mode,
-        config["data_type"],
         dataset,
         **vars(args),
     )
@@ -174,7 +195,7 @@ def main() -> None:
     pipeline.load_state_dict(torch.load(last_ckpt_path, weights_only=False)["pipeline"])
 
     if config["pipeline"]["multi_band_extinction"]:
-        num_bands = BANDS[config["data_type"]]
+        num_bands = BANDS[config["type"]]
     else:
         num_bands = 1
     sigma = torch.zeros((extract_dataset.idx.shape[0], num_bands), device=device)

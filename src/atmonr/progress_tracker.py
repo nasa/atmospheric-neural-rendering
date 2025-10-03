@@ -20,3 +20,9 @@ class ProgressTracker:
     pred_img: npt.NDArray[np.float64]
     # predicted pixels (only valid locations)
     pred_pixels: npt.NDArray[np.float64]
+    # surface
+    pred_img_surf: npt.NDArray[np.float64]
+    pred_pixels_surf: npt.NDArray[np.float64]
+    # atmosphere
+    pred_img_atmo: npt.NDArray[np.float64]
+    pred_pixels_atmo: npt.NDArray[np.float64]

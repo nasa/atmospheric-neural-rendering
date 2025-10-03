@@ -27,8 +27,7 @@ class Pipeline:
             config: Configuration options for this pipeline.
             dataset: Dataset to which this pipeline will be applied.
         """
-        assert config["ray_origin_height"] > 0
-        assert config["subsurface_depth"] >= 0
+        self.ray_origin_height = dataset.config["ray_origin_height"]
         assert not (
             config["point_preprocessor"] == "horizontal" and config["include_height"]
         )
@@ -78,9 +77,6 @@ class Pipeline:
     def compute_loss(
         self, ray_batch: Mapping[str, torch.Tensor], results: dict[str, torch.Tensor]
     ) -> torch.Tensor:
-        raise NotImplementedError
-
-    def update_parameters(self) -> None:
         raise NotImplementedError
 
     def state_dict(self) -> Mapping[str, Mapping[str, Any]]:

@@ -162,7 +162,7 @@ def main() -> None:
     if not args.min_alt:
         args.min_alt = 0
     if not args.max_alt:
-        args.max_alt = config["pipeline"]["ray_origin_height"]
+        args.max_alt = config["dataset"]["ray_origin_height"]
 
     # get the dataset
     dataset = get_dataset(

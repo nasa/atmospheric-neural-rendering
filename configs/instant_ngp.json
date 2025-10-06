@@ -3,7 +3,8 @@
         "type": "HARP2",
         "max_abs_view_angle": 45.0,
         "ray_origin_height": 20000,
-        "bands_to_keep": [0, 1, 2, 3]
+        "bands_to_keep": [0, 1, 2, 3],
+        "rgb_mode": "nadir"
     },
     "pipeline": {
         "type": "InstantNGP",
@@ -11,16 +12,16 @@
         "point_preprocessor": "horizontal",
         "num_bands": 4,
         "multi_band_extinction": false,
-        "num_samples_per_ray": 192,
-        "alt_compress_factor": 32,
-        "loss": "l1_plus_hdr",
+        "num_samples_per_ray": 1024,
+        "alt_compress_factor": 8,
+        "loss": "mse_plus_hdr",
         "instant_ngp": {
             "ema_decay": null,
             "encoding": {
                 "otype": "HashGrid",
                 "n_levels": 16,
                 "n_features_per_level": 2,
-                "log2_hashmap_size": 19,
+                "log2_hashmap_size": 21,
                 "base_resolution": 16,
                 "per_level_scale": 1.3819
             },
@@ -57,11 +58,11 @@
                     {
                         "n_dims_to_encode": 2,
                         "otype": "HashGrid",
-                        "n_levels": 6,
+                        "n_levels": 16,
                         "n_features_per_level": 2,
-                        "log2_hashmap_size": 16,
-                        "base_resolution": 64,
-                        "per_level_scale": 2
+                        "log2_hashmap_size": 19,
+                        "base_resolution": 16,
+                        "per_level_scale": 1.3819
                     },
                     {
                         "n_dims_to_encode": 3,
@@ -82,8 +83,8 @@
     "trainer": {
         "all_gpu": true,
         "num_workers": 0,
-        "batch_size": 32768,
-        "num_iters": 5e3,
+        "batch_size": 8192,
+        "num_iters": 1e4,
         "print_frequency": 10,
         "optimizer": {
             "lr": 1e-2,
@@ -97,8 +98,8 @@
         "scheduler": {
             "type": "fixed",
             "gamma": 0.33,
-            "decay_start": 1000,
-            "decay_interval": 500
+            "decay_start": 4000,
+            "decay_interval": 1000
         }
     }
 }

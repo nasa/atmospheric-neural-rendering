@@ -156,7 +156,7 @@ class InstantNGPPipeline(Pipeline):
         # repeat the direction vector N times to match the points vector
         dirs = ray_batch["dir"][:, None].repeat(1, N, 1)
 
-        # TODO: keep or remove?
+        # compress the altitude so the hash encoding behaves better
         pts[..., 2] = pts[..., 2] / self.config["alt_compress_factor"]
 
         # apply the MLPs, reshape color output
@@ -222,19 +222,18 @@ class InstantNGPPipeline(Pipeline):
 
         # Instant-NGP uses [0, 1], not [-1, 1]
         pts = (pts + 1) / 2
+
         # add height above surface to the points vector, if specified in the config
         if self.config["include_height"]:
             pts = append_heights(
                 pts[None], self.ray_origin_height, self.scale, self.offset
             )[0]
 
-        # pts[..., 2] = pts[..., 2] / self.config["alt_compress_factor"]
-        pts_comp = torch.cat(
-            [pts[..., :2], pts[..., 2:] / self.config["alt_compress_factor"]], dim=-1
-        )
+        # compress the altitude so the hash encoding behaves better
+        pts[..., 2] = pts[..., 2] / self.config["alt_compress_factor"]
 
         # pos_out = self.pos_model(pts)
-        pos_enc = self.pos_encoder(pts_comp)
+        pos_enc = self.pos_encoder(pts)
         pos_out = self.pos_mlp(pos_enc)
 
         # the first num_bands values of the intermediate output are treated as densities

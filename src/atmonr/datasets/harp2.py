@@ -67,7 +67,7 @@ class HARP2Dataset(Dataset):
 
         with torch.no_grad():
             self._init_data()
-            self._init_rgb_idxs()
+            self._init_rgb_idxs(self.config["rgb_mode"])
             self._init_ray_data(chunk_size)
 
     def _init_data(self) -> None:
@@ -127,7 +127,10 @@ class HARP2Dataset(Dataset):
         """Select the best angles to make an RGB image out of this granule.
 
         Args:
-            mode: TODO: describe and make configurable
+            mode: Either "nadir" or "most_pixels". In "nadir" mode, the RGB
+                visualization uses the closest to nadir non-striped view angles. In
+                "most_pixels" mode, the RGB visualization maximizes the number of valid
+                pixels.
         """
         angles = self.nc_data["sensor_views_bands/sensor_view_angle"][
             self.view_idx

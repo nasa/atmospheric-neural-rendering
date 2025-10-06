@@ -65,9 +65,10 @@ class HARP2Dataset(Dataset):
             self.config["bands_to_keep"],
         )
 
-        self._init_data()
-        self._init_rgb_idxs()
-        self._init_ray_data(chunk_size)
+        with torch.no_grad():
+            self._init_data()
+            self._init_rgb_idxs()
+            self._init_ray_data(chunk_size)
 
     def _init_data(self) -> None:
         """Parse the relevant data from the netCDF file."""

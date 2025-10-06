@@ -23,3 +23,6 @@ def l1_plus_hdr_loss(pred: torch.Tensor, gt: torch.Tensor, max_i: float) -> torc
 
 def mse_loss(pred: torch.Tensor, gt: torch.Tensor, max_i: float) -> torch.Tensor:
     return F.mse_loss(pred / max_i, gt / max_i)
+
+def mse_plus_hdr_loss(pred: torch.Tensor, gt: torch.Tensor, max_i: float) -> torch.Tensor:
+    return mse_loss(pred, gt, max_i) + 0.2 * hdr_loss(pred, gt, max_i)

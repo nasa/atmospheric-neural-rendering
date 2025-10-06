@@ -8,7 +8,14 @@ from torch.optim import AdamW, Optimizer
 
 from atmonr.datasets.factory import Dataset
 from atmonr.graphics_utils import render_with_surface
-from atmonr.losses import dark_loss, hdr_loss, l1_loss, l1_plus_hdr_loss, mse_loss
+from atmonr.losses import (
+    dark_loss,
+    hdr_loss,
+    l1_loss,
+    l1_plus_hdr_loss,
+    mse_loss,
+    mse_plus_hdr_loss,
+)
 from atmonr.pipelines.pipeline import Pipeline
 from atmonr.samplers import append_heights, sample_uniform_bins
 

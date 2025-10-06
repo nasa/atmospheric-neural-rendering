@@ -93,6 +93,7 @@ class InstantNGPPipeline(Pipeline):
             "l1": l1_loss,
             "l1_plus_hdr": l1_plus_hdr_loss,
             "mse": mse_loss,
+            "mse_plus_hdr": mse_plus_hdr_loss,
         }[self.config["loss"].lower()]
 
     def send_tensors_to(self, device: int) -> None:
@@ -119,7 +120,6 @@ class InstantNGPPipeline(Pipeline):
         optimizer = AdamW(
             [
                 {"params": no_decay_params, "weight_decay": 0},
-                # {"params": weak_decay_params, "weight_decay": config["weight_decay"]},
                 {"params": decay_params, "weight_decay": config["weight_decay"]},
             ],
             **config,
@@ -179,9 +179,6 @@ class InstantNGPPipeline(Pipeline):
         # pull the densities out of the intermediate output
         sigma = pos_out[..., : self.num_density_outputs].view(B_, N, -1)
 
-        # # exponential activation for color, clamp to 11 to avoid overflow w/ float16
-        # color = torch.exp(torch.clamp(color, max=11))
-        # color_surf = torch.exp(torch.clamp(color_surf, max=11))
         # ReLU activation for color
         color, color_surf = F.relu(color), F.relu(color_surf)
 
@@ -233,10 +230,11 @@ class InstantNGPPipeline(Pipeline):
                 pts[None], self.ray_origin_height, self.scale, self.offset
             )[0]
 
-        pts[..., 2] = pts[..., 2] / self.config["alt_compress_factor"]
+        # pts[..., 2] = pts[..., 2] / self.config["alt_compress_factor"]
+        pts_comp = torch.cat([pts[..., :2], pts[..., 2:] / self.config["alt_compress_factor"]], dim=-1)
 
         # pos_out = self.pos_model(pts)
-        pos_enc = self.pos_encoder(pts)
+        pos_enc = self.pos_encoder(pts_comp)
         pos_out = self.pos_mlp(pos_enc)
 
         # the first num_bands values of the intermediate output are treated as densities

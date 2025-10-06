@@ -190,7 +190,7 @@ class Trainer:
                 update_line += f" | {metric_name}: {metric_val:.3f}"
                 self.writer.add_scalar(metric_name, metric_val, self.epoch_idx)
             update_len = len(update_line)
-            print(update_line + max(0, last_update_len - update_len) * " ", end="\r")
+            print(update_line + max(0, last_update_len - update_len) * " ")
             last_update_len = update_len
 
             # update tensorboard with side-by-side image comparison

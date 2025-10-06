@@ -151,9 +151,7 @@ class InstantNGPPipeline(Pipeline):
 
         # add height above surface to the points vector, if specified in the config
         if self.config["include_height"]:
-            pts = append_heights(
-                pts, self.ray_origin_height, self.scale, self.offset
-            )
+            pts = append_heights(pts, self.ray_origin_height, self.scale, self.offset)
 
         # repeat the direction vector N times to match the points vector
         dirs = ray_batch["dir"][:, None].repeat(1, N, 1)
@@ -231,7 +229,9 @@ class InstantNGPPipeline(Pipeline):
             )[0]
 
         # pts[..., 2] = pts[..., 2] / self.config["alt_compress_factor"]
-        pts_comp = torch.cat([pts[..., :2], pts[..., 2:] / self.config["alt_compress_factor"]], dim=-1)
+        pts_comp = torch.cat(
+            [pts[..., :2], pts[..., 2:] / self.config["alt_compress_factor"]], dim=-1
+        )
 
         # pos_out = self.pos_model(pts)
         pos_enc = self.pos_encoder(pts_comp)

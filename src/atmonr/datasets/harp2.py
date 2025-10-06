@@ -125,7 +125,7 @@ class HARP2Dataset(Dataset):
 
     def _init_rgb_idxs(self, mode: str = "nadir") -> None:
         """Select the best angles to make an RGB image out of this granule.
-        
+
         Args:
             mode: TODO: describe and make configurable
         """
@@ -148,7 +148,9 @@ class HARP2Dataset(Dataset):
             return
         # if green and/or blue is missing but red is present, use grayscale red
         if not masks_rgb[1].any() or not masks_rgb[2].any():
-            best_idx = idxs_rgb[0][np.argmin(np.abs(angles_rgb[0]) + striped[masks_rgb[0]] * 1000).item()].item()
+            best_idx = idxs_rgb[0][
+                np.argmin(np.abs(angles_rgb[0]) + striped[masks_rgb[0]] * 1000).item()
+            ].item()
             self.best_rgb_idx = [best_idx, best_idx, best_idx]
             return
 
@@ -161,14 +163,16 @@ class HARP2Dataset(Dataset):
 
         if mode == "nadir":
             # get the closest to nadir, while dodging striped angles
-            nadir_idx_red = np.argmin(np.abs(angles_rgb[0]) + striped[masks_rgb[0]] * 1000).item()
+            nadir_idx_red = np.argmin(
+                np.abs(angles_rgb[0]) + striped[masks_rgb[0]] * 1000
+            ).item()
             # the green and blue _shouldn't_ be striped, though this doesn't check
             self.best_rgb_idx = [
                 idxs_rgb[0][nadir_idx_red].item(),
                 idx_nearest_green[nadir_idx_red].item(),
                 idx_nearest_blue[nadir_idx_red].item(),
             ]
-        elif mode == "most_pixels":        
+        elif mode == "most_pixels":
             # maximize across indices the minimum number across RGB of valid pixels
             maximizer = (
                 np.stack(
@@ -193,7 +197,7 @@ class HARP2Dataset(Dataset):
     def _init_ray_data(self, chunk_size: int) -> None:
         """Initialize the ray data for this dataset. Chunking is used to lower the size
         of the cache pytorch creates, easing the GPU memory load.
-        
+
         Args:
             chunk_size: Number of rays per chunk.
         """
@@ -274,7 +278,9 @@ class HARP2Dataset(Dataset):
         progress = ProgressTracker(
             self.ray_filter.view(
                 self.img_shp[0], self.img_shp[1], self.view_idx.shape[0]
-            ).cpu().numpy(),
+            )
+            .cpu()
+            .numpy(),
             target_img.cpu().numpy(),
             target_img_rgb.cpu().numpy(),
             pred_img.cpu().numpy(),
@@ -456,7 +462,7 @@ def get_indexes(
 ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
     """Get an index of which view angles are within a maximum absolute value threshold,
     as well as the index from each view into the band index.
-    
+
     Args:
         nc_data: The netCDF data of a HARP2 L1B or L1C file.
         max_abs_view_angle: The maximum absolute viewing angle to allow.

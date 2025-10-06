@@ -56,7 +56,7 @@ def render_with_surface(
     color_surf: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Render using a surface with assumed infinite density.
-    
+
     Args:
         z_vals: Distances in km of samples along the viewing rays (B, N_samples).
         color: Colors at sampled locations (B, N_samples, N_lambda).

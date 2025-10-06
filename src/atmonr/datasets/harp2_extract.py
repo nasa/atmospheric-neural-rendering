@@ -88,7 +88,9 @@ class _HARP2LocalExtractDataset(HARP2ExtractDataset):
         super().__init__(dataset)
         self.alt_step = alt_step
         self.min_alt = 0 if min_alt is None else min_alt
-        self.max_alt = self.dataset.config["ray_origin_height"] if max_alt is None else max_alt
+        self.max_alt = (
+            self.dataset.config["ray_origin_height"] if max_alt is None else max_alt
+        )
         self.sample_alt = torch.arange(
             self.min_alt,
             self.max_alt + self.alt_step / 2,
@@ -214,7 +216,9 @@ class HARP2VoxelGridExtractDataset(_HARP2LocalExtractDataset):
         self.horizontal_step = horizontal_step
         self.alt_step = alt_step
         self.min_alt = 0 if min_alt is None else min_alt
-        self.max_alt = self.dataset.config["ray_origin_height"] if max_alt is None else max_alt
+        self.max_alt = (
+            self.dataset.config["ray_origin_height"] if max_alt is None else max_alt
+        )
 
         # get bounding lat/lon, making 2 assumptions:
         # 1) the lat/lon arrays are ordered so u is decreasing in latitude and v is increasing in longitude
@@ -620,8 +624,10 @@ class HARP2EarthCAREExtractDataset(HARP2ExtractDataset):
         self.ec_h5 = h5py.File(Path("data") / "EarthCARE" / self.earthcare_filename)
         file_type = self.ec_h5["HeaderData/FixedProductHeader/File_Type"][()].decode()  # type: ignore
         if file_type != "ATL_EBD_2A":
-            raise NotImplementedError("Extraction currently only supports ATL_EBD_2A,"
-                                      f" not supported for '{file_type}'.")
+            raise NotImplementedError(
+                "Extraction currently only supports ATL_EBD_2A,"
+                f" not supported for '{file_type}'."
+            )
 
         # needed to get h5py to play nicely with pylance
         def _read_h5(k: str) -> h5py.Dataset:

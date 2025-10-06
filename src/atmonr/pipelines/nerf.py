@@ -125,9 +125,7 @@ class NeRFPipeline(Pipeline):
 
         # add height above surface to the points vector, if specified in the config
         if self.config["include_height"]:
-            pts = append_heights(
-                pts, self.ray_origin_height, self.scale, self.offset
-            )
+            pts = append_heights(pts, self.ray_origin_height, self.scale, self.offset)
 
         # position encoding with L_x frequencies for the points vector
         pts_enc = positional_encoding(pts, L_x).view((B_ * N, -1))

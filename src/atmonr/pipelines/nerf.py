@@ -125,9 +125,7 @@ class NeRFPipeline(Pipeline):
 
         # add height above surface to the points vector, if specified in the config
         if self.config["include_height"]:
-            pts = append_heights(
-                pts, self.config["ray_origin_height"], self.scale, self.offset
-            )
+            pts = append_heights(pts, self.ray_origin_height, self.scale, self.offset)
 
         # position encoding with L_x frequencies for the points vector
         pts_enc = positional_encoding(pts, L_x).view((B_ * N, -1))
@@ -155,7 +153,7 @@ class NeRFPipeline(Pipeline):
         sigma = F.relu(sigma)
 
         # volume rendering
-        color_map, weights = render(z_vals * (self.scale / 1000), color, sigma)
+        color_map, _, weights = render(z_vals * (self.scale / 1000), color, sigma)
 
         results = {
             f"color_{mode}": color,
@@ -206,7 +204,7 @@ class NeRFPipeline(Pipeline):
             pts = self.point_preprocessor(pts[None])[0]
         if self.config["include_height"]:
             pts = append_heights(
-                pts[None], self.config["ray_origin_height"], self.scale, self.offset
+                pts[None], self.ray_origin_height, self.scale, self.offset
             )[0]
         # position encoding with L_x frequencies for the points vector
         pts_enc = (
@@ -231,19 +229,15 @@ class NeRFPipeline(Pipeline):
             loss: Sum of the MSE losses for both the coarse and fine models.
         """
         results_c = torch.take_along_dim(
-            results["color_map_coarse"], ray_batch["band_idx"][:, None], 1
+            results["color_map_coarse"], ray_batch["irgb_idx"][:, None], 1
         )[:, 0]
         results_f = torch.take_along_dim(
-            results["color_map_fine"], ray_batch["band_idx"][:, None], 1
+            results["color_map_fine"], ray_batch["irgb_idx"][:, None], 1
         )[:, 0]
         loss_c = F.mse_loss(results_c, ray_batch["rad"])
         loss_f = F.mse_loss(results_f, ray_batch["rad"])
         loss = loss_c + loss_f
         return loss
-
-    def update_parameters(self) -> None:
-        """Update parameters with weight averaging. No action needed for NeRF."""
-        pass
 
     def state_dict(self) -> Mapping[str, Mapping[str, Any]]:
         """Get the state dictionary of this NeRFPipeline.

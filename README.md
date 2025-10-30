@@ -1,13 +1,13 @@
 # Atmospheric Neural Rendering (AtmoNR)
 
-![](assets/atmonr_instant_ngp.gif)  <!-- TO DO: swap to .mp4 after migrating to github  -->
+![](assets/atmonr_instant_ngp.webp)
 
 This is a library and set of scripts to support the usage of neural rendering for atmospheric / cloud tomography in multi-angle satellite data. In other words, this allows the unsupervised 3D reconstruction of clouds in flat, multi-angle satellite imagery.
 
 Current support includes two neural rendering methods: Neural Radiance Fields ([NeRF](https://github.com/bmild/nerf)) and Instant Neural Graphics Primitives ([Instant-NGP](https://github.com/NVlabs/instant-ngp)), as well as one data from one sensor: the Hyper Angular Rainbow Polarimeter ([HARP2](https://pace.oceansciences.org/harp2.htm)) aboard the Plankton, Aerosol, Cloud-ocean Ecosystem ([PACE](https://pace.gsfc.nasa.gov/)) mission.
 
 ## Getting Started
-Note that this project assumes access to a GPU with at least 32GB of VRAM, because all data is moved to the GPU before training begins to avoid CPU to GPU communication bottlenecks.
+Note that this project assumes access to a GPU with at least 32GB of VRAM, because all data is moved to the GPU before training begins to avoid CPU to GPU communication bottlenecks. A CUDA installation is required for tiny-cuda-nn.
 
 1. Clone this repository, then navigate to its top-level directory.
 2. Using mamba, create and activate the environment with:
@@ -16,25 +16,25 @@ Note that this project assumes access to a GPU with at least 32GB of VRAM, becau
     ```
 3. Follow the [Pytorch instructions](https://pytorch.org/get-started/locally/) to install torch and torchvision with CUDA support.
 
-4. Next, install torchmetrics:
+4. Install tiny-cuda-nn with Pytorch bindings:
     ```console
-    mamba install torchmetrics
+    pip install --no-build-isolation git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch
     ```
 
-5. Follow the [tiny-cuda-nn instructions](https://github.com/NVlabs/tiny-cuda-nn).
 
-6. To extract from HARP2 data, you'll need a digital elevation map (DEM), which you can download with:
+5. To extract from HARP2 data, you'll need a digital elevation map (DEM), which you can download with:
     ```console
     wget https://oceandata.sci.gsfc.nasa.gov/ocssw/static_ancillary/ETOPO1_ocssw.nc -O data/ETOPO1_ocssw.nc
     ```
 
-7. (_Optional_) If you'd like to render videos, you'll need to install the OpenVDB python bindings and the `vdb_render` binary. Follow the [OpenVDB instructions](https://github.com/AcademySoftwareFoundation/openvdb) to build from source, making sure to set `OPENVDB_BUILD_VDB_RENDER` and `OPENVDB_BUILD_PYTHON_MODULE` to `ON`.
+6. (_Optional_) If you'd like to render videos, you'll need to install the OpenVDB python bindings and the `vdb_render` binary. Follow the [OpenVDB instructions](https://github.com/AcademySoftwareFoundation/openvdb) to build from source, making sure to set `OPENVDB_BUILD_VDB_RENDER` and `OPENVDB_BUILD_PYTHON_MODULE` to `ON`.
 
     You will also need to install [ffmpeg](https://ffmpeg.org/), which is used to stitch frames into a video.
 
-8. Finally, install AtmoNR:
+7. Finally, install AtmoNR:
     ```console
-    pip install .
+    pip install .     # regular install, or...
+    pip install -e .  # editable install for developers
     ```
 
 ## Basic Usage

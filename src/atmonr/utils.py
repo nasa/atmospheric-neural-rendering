@@ -16,8 +16,8 @@ def load_config(config_path: str) -> dict:
     config = json.load(open(config_path))
     if config["pipeline"]["type"].lower() == "nerf":
         config["pipeline"]["type"] = "NeRF"
-    if config["data_type"].lower() == "harp2":
-        config["data_type"] = "HARP2"
+    if config["dataset"]["type"].lower() == "harp2":
+        config["dataset"]["type"] = "HARP2"
     return config
 
 

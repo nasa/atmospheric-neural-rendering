@@ -1,10 +1,10 @@
 """Train a neural rendering model to fit to multi-angle satellite data.
 
 Notices:
-The copyright notice below, to be included in the software, has also been provided in the license. 
- 
+The copyright notice below, to be included in the software, has also been provided in the license.
+
 “Copyright © 2023 United States Government as represented by the Administrator of the National Aeronautics and Space Administration.  All Rights Reserved.”
- 
+
 No other release is authorized at this time.
 """
 
@@ -94,12 +94,7 @@ def main() -> None:
     device = current_device()  # only support single-gpu training for now
 
     # get the dataset
-    dataset = get_dataset(
-        config["data_type"],
-        args.scene_filename,
-        ray_origin_height=config["pipeline"]["ray_origin_height"],
-        subsurface_depth=config["pipeline"]["subsurface_depth"],
-    )
+    dataset = get_dataset(config["dataset"], args.scene_filename)
 
     # set up the neural rendering pipeline and the trainer
     pipeline = get_pipeline(config["pipeline"], dataset)

@@ -4,6 +4,7 @@ from atmonr.datasets.harp2_extract import (
     HARP2L1CExtractDataset,
     HARP2VoxelGridExtractDataset,
     HARP2GlobalGridExtractDataset,
+    HARP2EarthCAREExtractDataset,
 )
 
 
@@ -17,52 +18,46 @@ BANDS = {
 Dataset = HARP2Dataset
 ExtractDataset = HARP2ExtractDataset
 
-datasets = {
+DATASETS = {
     "HARP2": HARP2Dataset,
     # Not yet implemented: AirHARP
 }
-extract_datasets = {
+EXTRACT_DATASETS = {
     "HARP2": {
         "l1c": HARP2L1CExtractDataset,
         "voxelgrid": HARP2VoxelGridExtractDataset,
         "globalgrid": HARP2GlobalGridExtractDataset,
+        "earthcare": HARP2EarthCAREExtractDataset,
     },
     # Not yet implemented: AirHARP
 }
 
 
 def get_dataset(
-    data_type: str,
+    config: dict,
     filename: str,
-    ray_origin_height: float,
-    subsurface_depth: float,
 ) -> Dataset:
     """Get a Dataset of the provided data type and filename.
 
     Args:
-        data_type: Must be one of the data types present in `datasets`. Determines the
-            module to use for parsing the data.
+        config: Config options for the dataset.
         filename: Name of the file containing the satellite scene, which must be present
             in the corresponding `data/...` subdirectory.
-        ray_origin_height: Height above the surface (in meters) at which to construct
-            the viewing ray origin points.
 
     Returns:
-        dataset: Dataset corresponding to the provided data_type and filename.
+        dataset: Dataset corresponding to the provided type and filename.
     """
-    if data_type not in datasets:
-        raise NotImplementedError(f"Dataset '{data_type}' is unrecognized!")
-    dataset = datasets[data_type](
+    if config["type"] not in DATASETS:
+        raise NotImplementedError(f"Dataset '{config['type']}' is unrecognized!")
+    dataset = DATASETS[config["type"]](
+        config=config,
         filename=filename,
-        ray_origin_height=ray_origin_height,
-        subsurface_depth=subsurface_depth,
     )
     return dataset
 
 
 def get_extract_dataset(
     mode: str,
-    data_type: str,
     dataset: Dataset,
     *args,
     **kwargs,
@@ -71,17 +66,17 @@ def get_extract_dataset(
 
     Args:
         mode: The extract mode, which defines the behavior of the ExtractDataset.
-        data_type: The data_type for this ExtractDataset.
         dataset: The dataset from which to extract.
 
     Returns:
         e_dataset: ExtractDataset for provided Dataset.
     """
-    if data_type not in extract_datasets:
+    data_type = dataset.config["type"]
+    if data_type not in EXTRACT_DATASETS:
         raise NotImplementedError(
             f"ExtractDataset data_type '{data_type}' is unrecognized!"
         )
-    e_dataset = extract_datasets[data_type][mode.lower()](
+    e_dataset = EXTRACT_DATASETS[data_type][mode.lower()](
         dataset,
         *args,
         **kwargs,

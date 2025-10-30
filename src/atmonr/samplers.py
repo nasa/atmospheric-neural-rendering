@@ -107,7 +107,6 @@ def sample_biased_bins(
     ray_batch: Mapping[str, torch.Tensor],
     n_bins: int,
     ray_origin_height: float,
-    subsurface_depth: float,
     alpha: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Sample points uniformly from variably-sized bins along a viewing ray. Points near
@@ -130,7 +129,6 @@ def sample_biased_bins(
             sampling is 64.
         ray_origin_height: Height above sea level (in meters) at which ray origins were
             constructed.
-        subsurface_depth: Height below sea level (in meters) at which rays terminate.
         alpha: Probability at ray_origin_height divided by probability at surface.
 
     Returns:
@@ -140,12 +138,8 @@ def sample_biased_bins(
     """
     assert alpha >= 0 and alpha <= 1
 
-    # ratio of above-surface to total length
-    r_x = ray_origin_height / (ray_origin_height + subsurface_depth)
-    # solution of inverse of cdf for r_x
-    r_y = (r_x * (alpha + 1) / 2) / (r_x * (alpha - 1) / 2 + 1)
     # normalization term := sum of cdf over [0, 1]
-    norm_term = (r_x * (alpha - 1) / 2) + 1
+    norm_term = (alpha + 1) / 2
 
     device = ray_batch["origin"].device
 
@@ -157,13 +151,12 @@ def sample_biased_bins(
     z_vals_flat = bins[:, :-1] + t_in_bin / n_bins
 
     # use the solution for the inverse of the cdf for binned samples
-    mask = z_vals_flat <= r_y
+    mask = z_vals_flat <= 1
     z_vals = torch.zeros_like(z_vals_flat)
     z_vals[mask] = (
-        -alpha
-        + torch.sqrt(alpha**2 + 2 * (1 - alpha) * norm_term * z_vals_flat[mask] / r_x)
-    ) * (r_x / (1 - alpha))
-    z_vals[~mask] = r_x + (1 - r_x) * (z_vals_flat[~mask] - r_y) / (1 - r_y)
+        -alpha + torch.sqrt(alpha**2 + 2 * (1 - alpha) * norm_term * z_vals_flat[mask])
+    ) * (1 / (1 - alpha))
+    z_vals[~mask] = 1
     z_vals *= ray_batch["len"][:, None]
 
     # get the points along those rays

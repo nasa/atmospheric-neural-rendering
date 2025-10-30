@@ -227,7 +227,6 @@ def get_rays(
     thetav: torch.Tensor,
     phiv: torch.Tensor,
     ray_origin_height: float,
-    subsurface_depth: float,
     tol: float = 10.0,
     max_iters: int = 20,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -240,9 +239,8 @@ def get_rays(
         alt: Surface altitude array of shape (P, A).
         thetav: View zenith array of shape (P, A).
         phiv: View azimuth array of shape (P, A).
-        ray_origin_height: Height above surface (in meters) at which to construct
-            ray origins.
-        subsurface_depth: Depth below surface (in meters) at which to terminate rays.
+        ray_origin_height: Height above ellipsoid surface (in meters) at which to
+            construct ray origins.
         tol: Tolerance (in meters) for error in ray origins.
         max_iters: Max number of iterations for finding the ray origins.
 
@@ -269,35 +267,27 @@ def get_rays(
     comp_dirs = -comp_dirs.view(dirs.shape)
 
     # iteratively solve for the origin point of rays
-    surface_to_origin_lens = (ray_origin_height - alt) / torch.cos(
-        thetav * torch.pi / 180
-    ).view(comp_dirs.shape[:-1]).double()
-    xyz2 = xyz - surface_to_origin_lens[..., None] * comp_dirs
+    lens = (ray_origin_height - alt) / torch.cos(thetav * torch.pi / 180).view(
+        comp_dirs.shape[:-1]
+    ).double()
+    xyz2 = xyz - lens[..., None] * comp_dirs
     _, _, alt_check = cartesian_to_horizontal(xyz2[..., 0], xyz2[..., 1], xyz2[..., 2])
     err = torch.abs(ray_origin_height - alt_check)
     iters = 0
     while iters < max_iters and (err > tol).any():
-        surface_to_origin_lens = surface_to_origin_lens * ray_origin_height / alt_check
-        xyz2 = xyz - surface_to_origin_lens[..., None] * comp_dirs
+        lens = lens * ray_origin_height / alt_check
+        xyz2 = xyz - lens[..., None] * comp_dirs
         _, _, alt_check = cartesian_to_horizontal(
             xyz2[..., 0], xyz2[..., 1], xyz2[..., 2]
         )
         err = torch.abs(ray_origin_height - alt_check)
         iters += 1
-    surface_to_origin_lens = surface_to_origin_lens.float()
+    lens = lens.float()
 
-    # solve for subsurface (end) point of rays, but only guess once
-    subsurface_lens = (subsurface_depth + alt) / torch.cos(
-        thetav * torch.pi / 180
-    ).view(comp_dirs.shape[:-1]).float()
-
-    lens = subsurface_lens + surface_to_origin_lens
-
-    origins = (xyz - comp_dirs * surface_to_origin_lens[..., None]).view(-1, 3)
+    origins = (xyz - comp_dirs * lens[..., None]).view(-1, 3)
     comp_dirs = comp_dirs.view(-1, 3)
-    lens = lens.flatten()
 
-    return origins.float(), comp_dirs.float(), lens.float()
+    return origins.float(), comp_dirs.float(), lens.float().flatten()
 
 
 def filter_rays(
@@ -481,9 +471,8 @@ def vincenty_point_along_geodesic(
         max_iters: Maximum number of iterations to perform.
 
     Returns:
-        s: Geodesic distance in meters between provided points.
-        alpha1: Forward azimuths at starting points.
-        alpha2: Forward azimuths at destination points.
+        latlon2: Estimated destination points' latitudes and longitudes.
+        alpha2: Forward azimuths at estimated destination points.
     """
     assert isinstance(latlon1, tuple) or isinstance(latlon1, torch.Tensor)
     assert isinstance(alpha1, torch.Tensor)

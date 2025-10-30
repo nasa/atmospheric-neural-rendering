@@ -4,6 +4,7 @@ __pycache__/
 .vscode
 .ipynb_checkpoints
 *.egg-info
+.dodsrc
 
 build
 _temp_frames

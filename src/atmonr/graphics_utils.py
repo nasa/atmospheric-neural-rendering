@@ -7,18 +7,19 @@ def render(
     z_vals: torch.Tensor,
     color: torch.Tensor,
     sigma: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Render sampled colors and densities along viewing rays using the Beer-Lambert
     Law. This approximates the true volume integral by assuming its homogeneity between
     subsequent samples.
 
     Args:
         z_vals: Distances in km of samples along the viewing rays (B, N_samples).
-        color: Colors at sampled locations(B, N_samples, N_lambda).
+        color: Colors at sampled locations (B, N_samples, N_lambda).
         sigma: Densities per band at sampled locations (B, N_samples, 1 or N_lambda).
 
     Returns:
         color_map: Collapsed color map as seen from viewing origin (B, N_lambda).
+        alpha: Attenuation at each location along rays (B, N_samples, N_lambda).
         weights: Samples of PDF describing relative volume density for coarse-to-fine
             (B, N_c, 1).
     """
@@ -45,7 +46,35 @@ def render(
     )
 
     color_map = torch.sum(color * weights, dim=1)
-    return color_map, weights
+    return color_map, alpha, weights
+
+
+def render_with_surface(
+    z_vals: torch.Tensor,
+    color: torch.Tensor,
+    sigma: torch.Tensor,
+    color_surf: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Render using a surface with assumed infinite density.
+
+    Args:
+        z_vals: Distances in km of samples along the viewing rays (B, N_samples).
+        color: Colors at sampled locations (B, N_samples, N_lambda).
+        sigma: Densities per band at sampled locations (B, N_samples, 1 or N_lambda).
+        color_surf: Colors at sampled surface locations (B, N_lambda).
+
+    Returns:
+        color_map: Collapsed color map as seen from viewing origin (B, N_lambda).
+        alpha: Attenuation at each location along rays (B, N_samples, N_lambda).
+        weights: Samples of PDF describing relative volume density for coarse-to-fine
+            (B, N_c, 1).
+        color_map_atmo: Collapsed color map of only atmospheric samples (B, N_lambda).
+        color_map_surf: Color map of only surface samples (B, N_lambda).
+    """
+    color_map_atmo, alpha, weights = render(z_vals, color, sigma)
+    color_map_surf = (1 - alpha).prod(dim=1) * color_surf
+    color_map = color_map_atmo + color_map_surf
+    return color_map, alpha, weights, color_map_atmo, color_map_surf
 
 
 def voxel_traversal(
